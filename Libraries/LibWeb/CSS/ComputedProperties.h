@@ -26,6 +26,11 @@
 
 namespace Web::CSS {
 
+enum class AnimatedPropertyResultOfTransition : u8 {
+    No,
+    Yes
+};
+
 class WEB_API ComputedProperties final : public JS::Cell {
     GC_CELL(ComputedProperties, JS::Cell);
     GC_DECLARE_ALLOCATOR(ComputedProperties);
@@ -50,18 +55,20 @@ public:
     };
 
     HashMap<PropertyID, NonnullRefPtr<StyleValue const>> const& animated_property_values() const { return m_animated_property_values; }
-    void reset_animated_properties(Badge<Animations::KeyframeEffect>);
+    void reset_non_inherited_animated_properties(Badge<Animations::KeyframeEffect>);
 
     bool is_property_important(PropertyID property_id) const;
     bool is_property_inherited(PropertyID property_id) const;
     bool is_animated_property_inherited(PropertyID property_id) const;
+    bool is_animated_property_result_of_transition(PropertyID property_id) const;
     void set_property_important(PropertyID, Important);
     void set_property_inherited(PropertyID, Inherited);
     void set_animated_property_inherited(PropertyID, Inherited);
+    void set_animated_property_result_of_transition(PropertyID, AnimatedPropertyResultOfTransition);
 
     void set_property(PropertyID, NonnullRefPtr<StyleValue const> value, Inherited = Inherited::No, Important = Important::No);
     void set_property_without_modifying_flags(PropertyID, NonnullRefPtr<StyleValue const> value);
-    void set_animated_property(PropertyID, NonnullRefPtr<StyleValue const> value, Inherited = Inherited::No);
+    void set_animated_property(PropertyID, NonnullRefPtr<StyleValue const> value, AnimatedPropertyResultOfTransition, Inherited = Inherited::No);
     void remove_animated_property(PropertyID);
     enum class WithAnimationsApplied {
         No,
@@ -69,9 +76,6 @@ public:
     };
     StyleValue const& property(PropertyID, WithAnimationsApplied = WithAnimationsApplied::Yes) const;
     void revert_property(PropertyID, ComputedProperties const& style_for_revert);
-
-    GC::Ptr<CSSStyleDeclaration const> transition_property_source() const { return m_transition_property_source; }
-    void set_transition_property_source(GC::Ptr<CSSStyleDeclaration const> declaration) { m_transition_property_source = declaration; }
 
     Size size_value(PropertyID) const;
     [[nodiscard]] Variant<LengthPercentage, NormalGap> gap_value(PropertyID) const;
@@ -122,6 +126,7 @@ public:
     TextDecorationThickness text_decoration_thickness() const;
     TextTransform text_transform() const;
     Vector<ShadowData> text_shadow(Layout::Node const&) const;
+    TextIndentData text_indent() const;
     TextWrapMode text_wrap_mode() const;
     ListStyleType list_style_type() const;
     ListStylePosition list_style_position() const;
@@ -175,7 +180,7 @@ public:
     CSS::EmptyCells empty_cells() const;
     Vector<Vector<String>> grid_template_areas() const;
     ObjectFit object_fit() const;
-    ObjectPosition object_position() const;
+    Position object_position() const;
     TableLayout table_layout() const;
     Direction direction() const;
     UnicodeBidi unicode_bidi() const;
@@ -212,6 +217,7 @@ public:
     Optional<Transformation> translate() const;
     Optional<Transformation> scale() const;
     Optional<CSSPixels> perspective() const;
+    Position perspective_origin() const;
 
     MaskType mask_type() const;
     float stop_opacity() const;
@@ -287,13 +293,13 @@ private:
 
     Overflow overflow(PropertyID) const;
     Vector<ShadowData> shadow(PropertyID, Layout::Node const&) const;
-
-    GC::Ptr<CSSStyleDeclaration const> m_transition_property_source;
+    Position position_value(PropertyID) const;
 
     Array<RefPtr<StyleValue const>, number_of_longhand_properties> m_property_values;
     Array<u8, ceil_div(number_of_longhand_properties, 8uz)> m_property_important {};
     Array<u8, ceil_div(number_of_longhand_properties, 8uz)> m_property_inherited {};
     Array<u8, ceil_div(number_of_longhand_properties, 8uz)> m_animated_property_inherited {};
+    Array<u8, ceil_div(number_of_longhand_properties, 8uz)> m_animated_property_result_of_transition {};
 
     HashMap<PropertyID, NonnullRefPtr<StyleValue const>> m_animated_property_values;
 

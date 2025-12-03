@@ -799,6 +799,19 @@ WebIDL::ExceptionOr<void> KeyframeEffect::set_pseudo_element(Optional<String> va
     return {};
 }
 
+Optional<DOM::AbstractElement> KeyframeEffect::target_abstract_element() const
+{
+    if (m_target_element)
+        return DOM::AbstractElement { *m_target_element, pseudo_element_type() };
+    return {};
+}
+
+void KeyframeEffect::set_target(DOM::AbstractElement abstract_element)
+{
+    set_target(&abstract_element.element());
+    m_target_pseudo_selector = abstract_element.pseudo_element().map([](auto it) { return CSS::Selector::PseudoElementSelector { it }; });
+}
+
 Optional<CSS::PseudoElement> KeyframeEffect::pseudo_element_type() const
 {
     if (!m_target_pseudo_selector.has_value())
@@ -922,7 +935,7 @@ void KeyframeEffect::update_computed_properties(AnimationUpdateContext& context)
     DOM::AbstractElement abstract_element { *target, pseudo_element_type() };
     context.elements.ensure(abstract_element, [computed_properties] {
         auto old_animated_properties = computed_properties->animated_property_values();
-        computed_properties->reset_animated_properties({});
+        computed_properties->reset_non_inherited_animated_properties({});
         return make<AnimationUpdateContext::ElementData>(move(old_animated_properties), computed_properties);
     });
 

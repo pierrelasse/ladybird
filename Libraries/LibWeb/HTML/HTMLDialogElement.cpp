@@ -88,8 +88,9 @@ void HTMLDialogElement::queue_a_dialog_toggle_event_task(AK::String old_state, A
         ToggleEventInit event_init {};
         event_init.old_state = move(old_state);
         event_init.new_state = move(new_state);
+        event_init.source = source;
 
-        dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::toggle, move(event_init), source));
+        dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::toggle, move(event_init)));
 
         // 2. Set element's dialog toggle task tracker to null.
         m_dialog_toggle_task_tracker = {};
@@ -177,6 +178,7 @@ WebIDL::ExceptionOr<void> HTMLDialogElement::show_modal()
     return show_a_modal_dialog(*this, nullptr);
 }
 
+// https://html.spec.whatwg.org/multipage/interactive-elements.html#show-a-modal-dialog
 WebIDL::ExceptionOr<void> HTMLDialogElement::show_a_modal_dialog(HTMLDialogElement& subject, GC::Ptr<DOM::Element> source)
 {
     // To show a modal dialog given a dialog element subject:
@@ -203,14 +205,16 @@ WebIDL::ExceptionOr<void> HTMLDialogElement::show_a_modal_dialog(HTMLDialogEleme
         return WebIDL::InvalidStateError::create(realm, "Dialog already open as popover"_utf16);
 
     // 6. If the result of firing an event named beforetoggle, using ToggleEvent,
-    //  with the cancelable attribute initialized to true, the oldState attribute initialized to "closed",
-    //  the newState attribute initialized to "open", and the source attribute initialized to source at subject is false, then return.
+    //    with the cancelable attribute initialized to true, the oldState attribute initialized to "closed",
+    //    the newState attribute initialized to "open", and the source attribute initialized to source at subject is
+    //    false, then return.
     ToggleEventInit event_init {};
     event_init.cancelable = true;
     event_init.old_state = "closed"_string;
     event_init.new_state = "open"_string;
+    event_init.source = source;
 
-    auto beforetoggle_result = subject.dispatch_event(ToggleEvent::create(realm, EventNames::beforetoggle, move(event_init), source));
+    auto beforetoggle_result = subject.dispatch_event(ToggleEvent::create(realm, EventNames::beforetoggle, move(event_init)));
     if (!beforetoggle_result)
         return {};
 
@@ -344,8 +348,9 @@ void HTMLDialogElement::close_the_dialog(Optional<String> result, GC::Ptr<DOM::E
     ToggleEventInit event_init {};
     event_init.old_state = "open"_string;
     event_init.new_state = "closed"_string;
+    event_init.source = source;
 
-    dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::beforetoggle, move(event_init), source));
+    dispatch_event(ToggleEvent::create(realm(), HTML::EventNames::beforetoggle, move(event_init)));
 
     // 3. If subject does not have an open attribute, then return.
     if (!has_attribute(AttributeNames::open))
@@ -484,8 +489,8 @@ void HTMLDialogElement::set_is_modal(bool is_modal)
     invalidate_style(DOM::StyleInvalidationReason::HTMLDialogElementSetIsModal);
 }
 
-// https://html.spec.whatwg.org/multipage/interactive-elements.html#the-dialog-element:is-valid-invoker-command-steps
-bool HTMLDialogElement::is_valid_invoker_command(String& command)
+// https://html.spec.whatwg.org/multipage/interactive-elements.html#the-dialog-element:is-valid-command-steps
+bool HTMLDialogElement::is_valid_command(String& command)
 {
     // 1. If command is in the Close state, the Request Close state, or the Show Modal state, then return true.
     if (command == "close" || command == "request-close" || command == "show-modal")
@@ -495,8 +500,8 @@ bool HTMLDialogElement::is_valid_invoker_command(String& command)
     return false;
 }
 
-// https://html.spec.whatwg.org/multipage/interactive-elements.html#the-dialog-element:invoker-command-steps
-void HTMLDialogElement::invoker_command_steps(DOM::Element& invoker, String& command)
+// https://html.spec.whatwg.org/multipage/interactive-elements.html#the-dialog-element:command-steps
+void HTMLDialogElement::command_steps(DOM::Element& source, String& command)
 {
     // 1. If element is in the popover showing state, then return.
     if (popover_visibility_state() == PopoverVisibilityState::Showing) {
@@ -504,22 +509,22 @@ void HTMLDialogElement::invoker_command_steps(DOM::Element& invoker, String& com
     }
 
     // 2. If command is in the Close state and element has an open attribute,
-    //    then close the dialog given element with invoker's optional value and invoker.
+    //    then close the dialog given element with source's optional value and source.
     if (command == "close" && has_attribute(AttributeNames::open)) {
-        auto const optional_value = as<FormAssociatedElement>(invoker).optional_value();
-        close_the_dialog(optional_value, invoker);
+        auto const optional_value = as<FormAssociatedElement>(source).optional_value();
+        close_the_dialog(optional_value, source);
     }
 
     // 3. If command is in the Request Close state and element has an open attribute,
-    //    then request to close the dialog element with invoker's optional value and invoker.
+    //    then request to close the dialog element with source's optional value and source.
     if (command == "request-close" && has_attribute(AttributeNames::open)) {
-        auto const optional_value = as<FormAssociatedElement>(invoker).optional_value();
-        request_close_the_dialog(optional_value, invoker);
+        auto const optional_value = as<FormAssociatedElement>(source).optional_value();
+        request_close_the_dialog(optional_value, source);
     }
 
-    // 4. If command is the Show Modal state and element does not have an open attribute, then show a modal dialog given element and invoker.
+    // 4. If command is the Show Modal state and element does not have an open attribute, then show a modal dialog given element and source.
     if (command == "show-modal" && !has_attribute(AttributeNames::open)) {
-        MUST(show_a_modal_dialog(*this, invoker));
+        MUST(show_a_modal_dialog(*this, source));
     }
 }
 

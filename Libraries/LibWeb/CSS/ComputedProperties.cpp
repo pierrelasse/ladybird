@@ -36,6 +36,7 @@
 #include <LibWeb/CSS/StyleValues/ShadowStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StyleValueList.h>
+#include <LibWeb/CSS/StyleValues/TextIndentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TextUnderlinePositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
@@ -54,7 +55,6 @@ ComputedProperties::~ComputedProperties() = default;
 void ComputedProperties::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    visitor.visit(m_transition_property_source);
 }
 
 bool ComputedProperties::is_property_important(PropertyID property_id) const
@@ -92,6 +92,14 @@ bool ComputedProperties::is_animated_property_inherited(PropertyID property_id) 
     return m_animated_property_inherited[n / 8] & (1 << (n % 8));
 }
 
+bool ComputedProperties::is_animated_property_result_of_transition(PropertyID property_id) const
+{
+    VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
+
+    size_t n = to_underlying(property_id) - to_underlying(first_longhand_property_id);
+    return m_animated_property_result_of_transition[n / 8] & (1 << (n % 8));
+}
+
 void ComputedProperties::set_property_inherited(PropertyID property_id, Inherited inherited)
 {
     VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
@@ -112,6 +120,17 @@ void ComputedProperties::set_animated_property_inherited(PropertyID property_id,
         m_animated_property_inherited[n / 8] |= (1 << (n % 8));
     else
         m_animated_property_inherited[n / 8] &= ~(1 << (n % 8));
+}
+
+void ComputedProperties::set_animated_property_result_of_transition(PropertyID property_id, AnimatedPropertyResultOfTransition animated_value_result_of_transition)
+{
+    VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
+
+    size_t n = to_underlying(property_id) - to_underlying(first_longhand_property_id);
+    if (animated_value_result_of_transition == AnimatedPropertyResultOfTransition::Yes)
+        m_animated_property_result_of_transition[n / 8] |= (1 << (n % 8));
+    else
+        m_animated_property_result_of_transition[n / 8] &= ~(1 << (n % 8));
 }
 
 void ComputedProperties::set_property(PropertyID id, NonnullRefPtr<StyleValue const> value, Inherited inherited, Important important)
@@ -149,10 +168,11 @@ void ComputedProperties::set_display_before_box_type_transformation(Display valu
     m_display_before_box_type_transformation = value;
 }
 
-void ComputedProperties::set_animated_property(PropertyID id, NonnullRefPtr<StyleValue const> value, Inherited inherited)
+void ComputedProperties::set_animated_property(PropertyID id, NonnullRefPtr<StyleValue const> value, AnimatedPropertyResultOfTransition animated_property_result_of_transition, Inherited inherited)
 {
     m_animated_property_values.set(id, move(value));
     set_animated_property_inherited(id, inherited);
+    set_animated_property_result_of_transition(id, animated_property_result_of_transition);
 }
 
 void ComputedProperties::remove_animated_property(PropertyID id)
@@ -160,17 +180,20 @@ void ComputedProperties::remove_animated_property(PropertyID id)
     m_animated_property_values.remove(id);
 }
 
-void ComputedProperties::reset_animated_properties(Badge<Animations::KeyframeEffect>)
+void ComputedProperties::reset_non_inherited_animated_properties(Badge<Animations::KeyframeEffect>)
 {
-    m_animated_property_values.clear();
+    for (auto property_id : m_animated_property_values.keys()) {
+        if (!is_animated_property_inherited(property_id))
+            m_animated_property_values.remove(property_id);
+    }
 }
 
 StyleValue const& ComputedProperties::property(PropertyID property_id, WithAnimationsApplied return_animated_value) const
 {
     VERIFY(property_id >= first_longhand_property_id && property_id <= last_longhand_property_id);
 
-    // Important properties override animated properties
-    if (!is_property_important(property_id) && return_animated_value == WithAnimationsApplied::Yes) {
+    // Important properties override animated but not transitioned properties
+    if ((!is_property_important(property_id) || is_animated_property_result_of_transition(property_id)) && return_animated_value == WithAnimationsApplied::Yes) {
         if (auto animated_value = m_animated_property_values.get(property_id); animated_value.has_value())
             return *animated_value.value();
     }
@@ -320,6 +343,25 @@ Color ComputedProperties::color_or_fallback(PropertyID id, ColorResolutionContex
     return value.to_color(color_resolution_context).value();
 }
 
+Position ComputedProperties::position_value(PropertyID id) const
+{
+    auto const& position = property(id).as_position();
+    Position position_value;
+    auto const& edge_x = position.edge_x();
+    auto const& edge_y = position.edge_y();
+    if (edge_x->is_edge()) {
+        auto const& edge = edge_x->as_edge();
+        position_value.edge_x = edge.edge().value_or(PositionEdge::Left);
+        position_value.offset_x = edge.offset();
+    }
+    if (edge_y->is_edge()) {
+        auto const& edge = edge_y->as_edge();
+        position_value.edge_y = edge.edge().value_or(PositionEdge::Top);
+        position_value.offset_y = edge.offset();
+    }
+    return position_value;
+}
+
 // https://drafts.csswg.org/css-values-4/#linked-properties
 HashMap<PropertyID, StyleValueVector> ComputedProperties::assemble_coordinated_value_list(PropertyID base_property_id, Vector<PropertyID> const& property_ids) const
 {
@@ -336,19 +378,11 @@ HashMap<PropertyID, StyleValueVector> ComputedProperties::assemble_coordinated_v
     // - If a coordinating list property has too few values specified, its value list is repeated to add more used
     //   values.
     // - The computed values of the coordinating list properties are not affected by such truncation or repetition.
-
-    // FIXME: This is only required until we update parse_comma_separated_list to always return a StyleValueList
-    auto const get_property_value_as_list = [&](PropertyID property_id) {
-        auto const& value = property(property_id);
-
-        return value.is_value_list() ? value.as_value_list().values() : StyleValueVector { value };
-    };
-
     HashMap<PropertyID, StyleValueVector> coordinated_value_list;
 
-    for (size_t i = 0; i < get_property_value_as_list(base_property_id).size(); i++) {
+    for (size_t i = 0; i < property(base_property_id).as_value_list().size(); i++) {
         for (auto property_id : property_ids) {
-            auto const& list = get_property_value_as_list(property_id);
+            auto const& list = property(property_id).as_value_list().values();
 
             coordinated_value_list.ensure(property_id).append(list[i % list.size()]);
         }
@@ -728,6 +762,11 @@ Optional<CSSPixels> ComputedProperties::perspective() const
     VERIFY_NOT_REACHED();
 }
 
+Position ComputedProperties::perspective_origin() const
+{
+    return position_value(PropertyID::PerspectiveOrigin);
+}
+
 TransformOrigin ComputedProperties::transform_origin() const
 {
     auto length_percentage_with_keywords_resolved = [](StyleValue const& value) -> LengthPercentage {
@@ -794,8 +833,6 @@ Appearance ComputedProperties::appearance() const
     auto appearance = keyword_to_appearance(value.to_keyword()).release_value();
     switch (appearance) {
     // Note: All these compatibility values can be treated as 'auto'
-    case Appearance::Textfield:
-    case Appearance::MenulistButton:
     case Appearance::Searchfield:
     case Appearance::Textarea:
     case Appearance::PushButton:
@@ -809,6 +846,10 @@ Appearance ComputedProperties::appearance() const
     case Appearance::ProgressBar:
     case Appearance::Button:
         appearance = Appearance::Auto;
+        break;
+    // NB: <compat-special> values behave like auto but can also have an effect. Preserve them.
+    case Appearance::Textfield:
+    case Appearance::MenulistButton:
         break;
     default:
         break;
@@ -1334,29 +1375,21 @@ Vector<ShadowData> ComputedProperties::shadow(PropertyID property_id, Layout::No
         };
     };
 
-    if (value.is_value_list()) {
-        auto const& value_list = value.as_value_list();
+    if (value.to_keyword() == Keyword::None)
+        return {};
 
-        Vector<ShadowData> shadow_data;
-        shadow_data.ensure_capacity(value_list.size());
-        for (auto const& layer_value : value_list.values()) {
-            auto maybe_shadow_data = make_shadow_data(layer_value->as_shadow());
-            if (!maybe_shadow_data.has_value())
-                return {};
-            shadow_data.append(maybe_shadow_data.release_value());
-        }
+    auto const& value_list = value.as_value_list();
 
-        return shadow_data;
-    }
-
-    if (value.is_shadow()) {
-        auto maybe_shadow_data = make_shadow_data(value.as_shadow());
+    Vector<ShadowData> shadow_data;
+    shadow_data.ensure_capacity(value_list.size());
+    for (auto const& layer_value : value_list.values()) {
+        auto maybe_shadow_data = make_shadow_data(layer_value->as_shadow());
         if (!maybe_shadow_data.has_value())
             return {};
-        return { maybe_shadow_data.release_value() };
+        shadow_data.append(maybe_shadow_data.release_value());
     }
 
-    return {};
+    return shadow_data;
 }
 
 Vector<ShadowData> ComputedProperties::box_shadow(Layout::Node const& layout_node) const
@@ -1367,6 +1400,17 @@ Vector<ShadowData> ComputedProperties::box_shadow(Layout::Node const& layout_nod
 Vector<ShadowData> ComputedProperties::text_shadow(Layout::Node const& layout_node) const
 {
     return shadow(PropertyID::TextShadow, layout_node);
+}
+
+TextIndentData ComputedProperties::text_indent() const
+{
+    auto const& value = property(PropertyID::TextIndent).as_text_indent();
+
+    return TextIndentData {
+        .length_percentage = LengthPercentage::from_style_value(value.length_percentage()),
+        .each_line = value.each_line(),
+        .hanging = value.hanging(),
+    };
 }
 
 TextWrapMode ComputedProperties::text_wrap_mode() const
@@ -2009,24 +2053,9 @@ ObjectFit ComputedProperties::object_fit() const
     return keyword_to_object_fit(value.to_keyword()).release_value();
 }
 
-ObjectPosition ComputedProperties::object_position() const
+Position ComputedProperties::object_position() const
 {
-    auto const& value = property(PropertyID::ObjectPosition);
-    auto const& position = value.as_position();
-    ObjectPosition object_position;
-    auto const& edge_x = position.edge_x();
-    auto const& edge_y = position.edge_y();
-    if (edge_x->is_edge()) {
-        auto const& edge = edge_x->as_edge();
-        object_position.edge_x = edge.edge().value_or(PositionEdge::Left);
-        object_position.offset_x = edge.offset();
-    }
-    if (edge_y->is_edge()) {
-        auto const& edge = edge_y->as_edge();
-        object_position.edge_y = edge.edge().value_or(PositionEdge::Top);
-        object_position.offset_y = edge.offset();
-    }
-    return object_position;
+    return position_value(PropertyID::ObjectPosition);
 }
 
 TableLayout ComputedProperties::table_layout() const
@@ -2264,14 +2293,25 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
         auto animation_fill_mode_style_value = coordinated_properties.get(PropertyID::AnimationFillMode).value()[i];
         auto animation_composition_style_value = coordinated_properties.get(PropertyID::AnimationComposition).value()[i];
 
-        auto duration = [&] {
-            if (animation_duration_style_value->is_time())
-                return animation_duration_style_value->as_time().time().to_milliseconds();
+        // https://drafts.csswg.org/css-animations-2/#animation-duration
+        auto duration = [&] -> Variant<double, String> {
+            // auto
+            if (animation_duration_style_value->to_keyword() == Keyword::Auto) {
+                // For time-driven animations, equivalent to 0s.
+                return 0;
 
-            if (animation_duration_style_value->is_calculated())
-                return animation_duration_style_value->as_calculated().resolve_time({}).value().to_milliseconds();
+                // FIXME: For scroll-driven animations, equivalent to the duration necessary to fill the timeline in
+                //        consideration of animation-range, animation-delay, and animation-iteration-count. See
+                //        Scroll-driven Animations § 4.1 Finite Timeline Calculations.
+            }
 
-            VERIFY_NOT_REACHED();
+            // <time [0s,∞]>
+
+            // FIXME: For scroll-driven animations, treated as auto.
+
+            // For time-driven animations, specifies the length of time that an animation takes to complete one cycle.
+            // A negative <time> is invalid.
+            return Time::from_style_value(animation_duration_style_value, {}).to_milliseconds();
         }();
 
         auto timing_function = EasingFunction::from_style_value(animation_timing_function_style_value);
@@ -2291,15 +2331,7 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
 
         auto direction = keyword_to_animation_direction(animation_direction_style_value->to_keyword()).value();
         auto play_state = keyword_to_animation_play_state(animation_play_state_style_value->to_keyword()).value();
-        auto delay = [&] {
-            if (animation_delay_style_value->is_time())
-                return animation_delay_style_value->as_time().time().to_milliseconds();
-
-            if (animation_delay_style_value->is_calculated())
-                return animation_delay_style_value->as_calculated().resolve_time({}).value().to_milliseconds();
-
-            VERIFY_NOT_REACHED();
-        }();
+        auto delay = Time::from_style_value(animation_delay_style_value, {}).to_milliseconds();
         auto fill_mode = keyword_to_animation_fill_mode(animation_fill_mode_style_value->to_keyword()).value();
         auto composition = keyword_to_animation_composition(animation_composition_style_value->to_keyword()).value();
 
@@ -2501,20 +2533,14 @@ WillChange ComputedProperties::will_change() const
         return property_id.release_value();
     };
 
-    if (value.is_value_list()) {
-        auto const& value_list = value.as_value_list();
-        Vector<WillChange::WillChangeEntry> will_change_entries;
-        for (auto const& style_value : value_list.values()) {
-            if (auto entry = to_will_change_entry(*style_value); entry.has_value())
-                will_change_entries.append(*entry);
-        }
-        return WillChange(move(will_change_entries));
+    auto const& value_list = value.as_value_list();
+    Vector<WillChange::WillChangeEntry> will_change_entries;
+    for (auto const& style_value : value_list.values()) {
+        if (auto entry = to_will_change_entry(*style_value); entry.has_value())
+            will_change_entries.append(*entry);
     }
 
-    auto will_change_entry = to_will_change_entry(value);
-    if (will_change_entry.has_value())
-        return WillChange({ *will_change_entry });
-    return WillChange::make_auto();
+    return WillChange(move(will_change_entries));
 }
 
 CSSPixels ComputedProperties::font_size() const

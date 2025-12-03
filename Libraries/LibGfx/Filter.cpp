@@ -6,6 +6,7 @@
 
 #include <LibGfx/Filter.h>
 #include <LibGfx/FilterImpl.h>
+#include <LibGfx/ImmutableBitmap.h>
 #include <LibGfx/SkiaUtils.h>
 #include <core/SkBlendMode.h>
 #include <core/SkColorFilter.h>
@@ -275,6 +276,18 @@ Filter Filter::merge(Vector<Optional<Filter>> const& inputs)
         skia_filters.unchecked_append(filter.has_value() ? filter->m_impl->filter : nullptr);
 
     return Filter(Impl::create(SkImageFilters::Merge(skia_filters.data(), skia_filters.size())));
+}
+
+Filter Filter::erode(float radius_x, float radius_y, Optional<Filter> const& input)
+{
+    sk_sp<SkImageFilter> input_skia = input.has_value() ? input->m_impl->filter : nullptr;
+    return Filter(Impl::create(SkImageFilters::Erode(radius_x, radius_y, input_skia)));
+}
+
+Filter Filter::dilate(float radius_x, float radius_y, Optional<Filter> const& input)
+{
+    sk_sp<SkImageFilter> input_skia = input.has_value() ? input->m_impl->filter : nullptr;
+    return Filter(Impl::create(SkImageFilters::Dilate(radius_x, radius_y, input_skia)));
 }
 
 Filter Filter::offset(float dx, float dy, Optional<Filter const&> input)

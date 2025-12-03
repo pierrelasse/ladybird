@@ -18,6 +18,7 @@
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOMURL/DOMURL.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/HTML/Window.h>
 
@@ -38,6 +39,8 @@ CSSImportRule::CSSImportRule(JS::Realm& realm, URL url, GC::Ptr<DOM::Document> d
     , m_media_query_list(move(media_query_list))
 {
 }
+
+CSSImportRule::~CSSImportRule() = default;
 
 void CSSImportRule::initialize(JS::Realm& realm)
 {
@@ -123,11 +126,15 @@ void CSSImportRule::fetch()
     // FIXME: Figure out the "correct" way to delay the load event.
     m_document_load_event_delayer.emplace(*m_document);
 
+    // AD-HOC: Track pending import rules to block rendering until they are done.
+    m_document->add_pending_css_import_rule({}, *this);
+
     // 4. Fetch a style resource from parsedUrl, with stylesheet parentStylesheet, destination "style", CORS mode "no-cors", and processResponse being the following steps given response response and byte stream, null or failure byteStream:
     (void)fetch_a_style_resource(parsed_url.value(), { parent_style_sheet }, Fetch::Infrastructure::Request::Destination::Style, CorsMode::NoCors,
-        [strong_this = GC::Ref { *this }, parent_style_sheet = GC::Ref { parent_style_sheet }, parsed_url = parsed_url.value()](auto response, auto maybe_byte_stream) {
+        [strong_this = GC::Ref { *this }, parent_style_sheet = GC::Ref { parent_style_sheet }, parsed_url = parsed_url.value(), document = m_document](auto response, auto maybe_byte_stream) {
             // AD-HOC: Stop delaying the load event.
-            ScopeGuard guard = [strong_this] {
+            ScopeGuard guard = [strong_this, document] {
+                document->remove_pending_css_import_rule({}, strong_this);
                 strong_this->m_document_load_event_delayer.clear();
             };
 
@@ -149,7 +156,7 @@ void CSSImportRule::fetch()
             // 4. Let importedStylesheet be the result of parsing byteStream given parsedUrl.
             // FIXME: Tidy up our parsing API. For now, do the decoding here.
             Optional<String> mime_type_charset;
-            if (auto extracted_mime_type = response->header_list()->extract_mime_type(); extracted_mime_type.has_value()) {
+            if (auto extracted_mime_type = Fetch::Infrastructure::extract_mime_type(response->header_list()); extracted_mime_type.has_value()) {
                 if (auto charset = extracted_mime_type->parameters().get("charset"sv); charset.has_value())
                     mime_type_charset = charset.value();
             }

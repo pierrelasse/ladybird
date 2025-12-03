@@ -331,7 +331,7 @@ static void socket_notifier(CFSocketRef socket, CFSocketCallBackType notificatio
     // before dispatching the event, which allows it to be triggered again.
     CFSocketEnableCallBacks(socket, notification_type);
 
-    Core::NotifierActivationEvent event(notifier.fd(), notifier.type());
+    Core::NotifierActivationEvent event;
     notifier.dispatch_event(event);
 
     // This manual process of enabling the callbacks also seems to require waking the event loop,
@@ -483,16 +483,6 @@ void EventLoopImplementationMacOS::wake()
 bool EventLoopImplementationMacOS::was_exit_requested() const
 {
     return ![NSApp isRunning];
-}
-
-void EventLoopImplementationMacOS::post_event(Core::EventReceiver& receiver, NonnullOwnPtr<Core::Event>&& event)
-{
-    m_thread_event_queue.post_event(receiver, move(event));
-
-    bool expected = false;
-    if (m_impl->deferred_source && m_impl->deferred_source_pending.compare_exchange_strong(expected, true)) {
-        CFRunLoopSourceSignal(m_impl->deferred_source);
-    }
 }
 
 }

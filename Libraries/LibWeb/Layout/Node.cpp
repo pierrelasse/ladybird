@@ -622,9 +622,7 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     computed_values.set_text_underline_offset(computed_style.text_underline_offset());
     computed_values.set_text_underline_position(computed_style.text_underline_position());
 
-    if (auto text_indent = computed_style.length_percentage(CSS::PropertyID::TextIndent, *this, CSS::ComputedProperties::ClampNegativeLengths::No); text_indent.has_value())
-        computed_values.set_text_indent(text_indent.release_value());
-
+    computed_values.set_text_indent(computed_style.text_indent());
     computed_values.set_text_wrap_mode(computed_style.text_wrap_mode());
     computed_values.set_tab_size(computed_style.tab_size());
 
@@ -700,8 +698,9 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     computed_values.set_transformations(computed_style.transformations());
     computed_values.set_transform_box(computed_style.transform_box());
     computed_values.set_transform_origin(computed_style.transform_origin());
-    computed_values.set_perspective(computed_style.perspective());
     computed_values.set_transform_style(computed_style.transform_style());
+    computed_values.set_perspective(computed_style.perspective());
+    computed_values.set_perspective_origin(computed_style.perspective_origin());
 
     auto const& transition_delay_property = computed_style.property(CSS::PropertyID::TransitionDelay);
     if (transition_delay_property.is_time()) {
@@ -788,7 +787,15 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
     computed_values.set_shape_rendering(computed_style.shape_rendering());
     computed_values.set_paint_order(computed_style.paint_order());
 
-    auto const& mask_image = computed_style.property(CSS::PropertyID::MaskImage);
+    // FIXME: We should actually support more than one mask image rather than just using the first
+    auto const& mask_image = [&] -> CSS::StyleValue const& {
+        auto const& value = computed_style.property(CSS::PropertyID::MaskImage);
+
+        if (value.is_value_list())
+            return value.as_value_list().values()[0];
+
+        return value;
+    }();
     if (mask_image.is_url()) {
         computed_values.set_mask(mask_image.as_url().url());
     } else if (mask_image.is_abstract_image()) {
@@ -923,6 +930,15 @@ void NodeWithStyle::apply_style(CSS::ComputedProperties const& computed_style)
         box_node->propagate_style_along_continuation(computed_style);
 }
 
+void NodeWithStyle::propagate_non_inherit_values(NodeWithStyle& target_node) const
+{
+    // NOTE: These properties are not inherited, but we still have to propagate them to anonymous wrappers.
+    target_node.mutable_computed_values().set_text_decoration_line(computed_values().text_decoration_line());
+    target_node.mutable_computed_values().set_text_decoration_thickness(computed_values().text_decoration_thickness());
+    target_node.mutable_computed_values().set_text_decoration_color(computed_values().text_decoration_color());
+    target_node.mutable_computed_values().set_text_decoration_style(computed_values().text_decoration_style());
+}
+
 void NodeWithStyle::propagate_style_to_anonymous_wrappers()
 {
     // Update the style of any anonymous wrappers that inherit from this node.
@@ -941,6 +957,8 @@ void NodeWithStyle::propagate_style_to_anonymous_wrappers()
         if (child.is_anonymous() && !is<TableWrapper>(child)) {
             auto& child_computed_values = static_cast<CSS::MutableComputedValues&>(static_cast<CSS::ComputedValues&>(const_cast<CSS::ImmutableComputedValues&>(child.computed_values())));
             child_computed_values.inherit_from(computed_values());
+            propagate_non_inherit_values(child);
+            child.propagate_style_to_anonymous_wrappers();
         }
         return IterationDecision::Continue;
     });
@@ -1020,13 +1038,7 @@ GC::Ref<NodeWithStyle> NodeWithStyle::create_anonymous_wrapper() const
 {
     auto wrapper = heap().allocate<BlockContainer>(const_cast<DOM::Document&>(document()), nullptr, computed_values().clone_inherited_values());
     wrapper->mutable_computed_values().set_display(CSS::Display(CSS::DisplayOutside::Block, CSS::DisplayInside::Flow));
-
-    // NOTE: These properties are not inherited, but we still have to propagate them to anonymous wrappers.
-    wrapper->mutable_computed_values().set_text_decoration_line(computed_values().text_decoration_line());
-    wrapper->mutable_computed_values().set_text_decoration_thickness(computed_values().text_decoration_thickness());
-    wrapper->mutable_computed_values().set_text_decoration_color(computed_values().text_decoration_color());
-    wrapper->mutable_computed_values().set_text_decoration_style(computed_values().text_decoration_style());
-
+    propagate_non_inherit_values(*wrapper);
     // CSS 2.2 9.2.1.1 creates anonymous block boxes, but 9.4.1 states inline-block creates a BFC.
     // Set wrapper to inline-block to participate correctly in the IFC within the parent inline-block.
     if (display().is_inline_block() && !has_children()) {

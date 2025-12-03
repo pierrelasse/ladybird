@@ -267,6 +267,8 @@ public:
 
     CSS::StyleSheetList* style_sheets_for_bindings() { return &style_sheets(); }
 
+    double ensure_element_shared_css_random_base_value(CSS::RandomCachingKey const&);
+
     Optional<String> get_style_sheet_source(CSS::StyleSheetIdentifier const&) const;
 
     virtual FlyString node_name() const override { return "#document"_fly_string; }
@@ -540,6 +542,9 @@ public:
     bool anything_is_delaying_the_load_event() const;
     void increment_number_of_things_delaying_the_load_event(Badge<DocumentLoadEventDelayer>);
     void decrement_number_of_things_delaying_the_load_event(Badge<DocumentLoadEventDelayer>);
+
+    void add_pending_css_import_rule(Badge<CSS::CSSImportRule>, GC::Ref<CSS::CSSImportRule>);
+    void remove_pending_css_import_rule(Badge<CSS::CSSImportRule>, GC::Ref<CSS::CSSImportRule>);
 
     bool page_showing() const { return m_page_showing; }
     void set_page_showing(bool);
@@ -1094,6 +1099,8 @@ private:
     // https://html.spec.whatwg.org/multipage/semantics.html#script-blocking-style-sheet-set
     HashTable<GC::Ref<DOM::Element>> m_script_blocking_style_sheet_set;
 
+    HashTable<GC::Ref<CSS::CSSImportRule>> m_pending_css_import_rules;
+
     GC::Ptr<HTML::History> m_history;
 
     size_t m_number_of_things_delaying_the_load_event { 0 };
@@ -1346,6 +1353,9 @@ private:
     HashMap<FlyString, GC::Ref<Web::CSS::CSSPropertyRule>> m_registered_custom_properties;
 
     CSS::StyleScope m_style_scope;
+
+    // https://drafts.csswg.org/css-values-5/#random-caching
+    HashMap<CSS::RandomCachingKey, double> m_element_shared_css_random_base_value_cache;
 };
 
 template<>

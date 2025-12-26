@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/Function.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Forward.h>
 
@@ -27,7 +28,8 @@ public:
 
     bool is_empty() const { return m_elements.is_empty(); }
     void push(GC::Ref<DOM::Element> element) { m_elements.append(element); }
-    GC::Ref<DOM::Element> pop() { return *m_elements.take_last(); }
+    GC::Ref<DOM::Element> pop();
+    void set_on_element_popped(Function<void(DOM::Element&)> on_element_popped) { m_on_element_popped = move(on_element_popped); }
     void remove(DOM::Element const& element);
     void replace(DOM::Element const& to_remove, GC::Ref<DOM::Element> to_add);
     void insert_immediately_below(GC::Ref<DOM::Element> element_to_add, DOM::Element const& target);
@@ -39,7 +41,6 @@ public:
     bool has_in_button_scope(FlyString const& tag_name) const;
     bool has_in_table_scope(FlyString const& tag_name) const;
     bool has_in_list_item_scope(FlyString const& tag_name) const;
-    bool has_in_select_scope(FlyString const& tag_name) const;
 
     bool has_in_scope(DOM::Element const&) const;
 
@@ -49,7 +50,7 @@ public:
     auto const& elements() const { return m_elements; }
     auto& elements() { return m_elements; }
 
-    void pop_until_an_element_with_tag_name_has_been_popped(FlyString const& local_name);
+    void pop_until_an_element_with_tag_name_has_been_popped(FlyString const& tag_name);
 
     GC::Ptr<DOM::Element> topmost_special_node_below(DOM::Element const&);
 
@@ -72,6 +73,7 @@ private:
     bool has_in_scope_impl(DOM::Element const& target_node, Vector<FlyString> const&) const;
 
     Vector<GC::Ref<DOM::Element>> m_elements;
+    Function<void(DOM::Element&)> m_on_element_popped;
 };
 
 }

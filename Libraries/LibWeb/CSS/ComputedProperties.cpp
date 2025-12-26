@@ -11,6 +11,8 @@
 #include <LibGC/CellAllocator.h>
 #include <LibWeb/CSS/Clip.h>
 #include <LibWeb/CSS/ComputedProperties.h>
+#include <LibWeb/CSS/FontComputer.h>
+#include <LibWeb/CSS/StyleValues/BackgroundSizeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ContentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterDefinitionsStyleValue.h>
@@ -32,6 +34,7 @@
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RectStyleValue.h>
+#include <LibWeb/CSS/StyleValues/RepeatStyleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ScrollbarColorStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ShadowStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
@@ -142,11 +145,19 @@ void ComputedProperties::set_property(PropertyID id, NonnullRefPtr<StyleValue co
     set_property_inherited(id, inherited);
 }
 
+static bool property_affects_computed_font_list(PropertyID id)
+{
+    return first_is_one_of(id, PropertyID::FontFamily, PropertyID::FontSize, PropertyID::FontStyle, PropertyID::FontWeight, PropertyID::FontWidth, PropertyID::FontVariationSettings);
+}
+
 void ComputedProperties::set_property_without_modifying_flags(PropertyID id, NonnullRefPtr<StyleValue const> value)
 {
     VERIFY(id >= first_longhand_property_id && id <= last_longhand_property_id);
 
     m_property_values[to_underlying(id) - to_underlying(first_longhand_property_id)] = move(value);
+
+    if (property_affects_computed_font_list(id))
+        clear_computed_font_list_cache();
 }
 
 void ComputedProperties::revert_property(PropertyID id, ComputedProperties const& style_for_revert)
@@ -173,6 +184,9 @@ void ComputedProperties::set_animated_property(PropertyID id, NonnullRefPtr<Styl
     m_animated_property_values.set(id, move(value));
     set_animated_property_inherited(id, inherited);
     set_animated_property_result_of_transition(id, animated_property_result_of_transition);
+
+    if (property_affects_computed_font_list(id))
+        clear_computed_font_list_cache();
 }
 
 void ComputedProperties::remove_animated_property(PropertyID id)
@@ -198,7 +212,7 @@ StyleValue const& ComputedProperties::property(PropertyID property_id, WithAnima
             return *animated_value.value();
     }
 
-    // By the time we call this method, all properties have values assigned.
+    // By the time we call this method, the property should have been assigned
     return *m_property_values[to_underlying(property_id) - to_underlying(first_longhand_property_id)];
 }
 
@@ -618,6 +632,86 @@ ImageRendering ComputedProperties::image_rendering() const
     return keyword_to_image_rendering(value.to_keyword()).release_value();
 }
 
+// https://drafts.csswg.org/css-backgrounds-4/#layering
+Vector<BackgroundLayerData> ComputedProperties::background_layers() const
+{
+    auto coordinated_value_list = assemble_coordinated_value_list(
+        PropertyID::BackgroundImage,
+        {
+            PropertyID::BackgroundAttachment,
+            PropertyID::BackgroundBlendMode,
+            PropertyID::BackgroundClip,
+            PropertyID::BackgroundImage,
+            PropertyID::BackgroundOrigin,
+            PropertyID::BackgroundPositionX,
+            PropertyID::BackgroundPositionY,
+            PropertyID::BackgroundRepeat,
+            PropertyID::BackgroundSize,
+        });
+
+    Vector<BackgroundLayerData> layers;
+    // The number of layers is determined by the number of comma-separated values in the background-image property
+    layers.ensure_capacity(coordinated_value_list.get(PropertyID::BackgroundImage)->size());
+
+    for (size_t i = 0; i < coordinated_value_list.get(PropertyID::BackgroundImage)->size(); i++) {
+        auto const& background_attachment_value = coordinated_value_list.get(PropertyID::BackgroundAttachment)->at(i);
+        auto const& background_blend_mode_value = coordinated_value_list.get(PropertyID::BackgroundBlendMode)->at(i);
+        auto const& background_clip_value = coordinated_value_list.get(PropertyID::BackgroundClip)->at(i);
+        auto const& background_image_value = coordinated_value_list.get(PropertyID::BackgroundImage)->at(i);
+        auto const& background_origin_value = coordinated_value_list.get(PropertyID::BackgroundOrigin)->at(i);
+        auto const& background_position_x_value = coordinated_value_list.get(PropertyID::BackgroundPositionX)->at(i);
+        auto const& background_position_y_value = coordinated_value_list.get(PropertyID::BackgroundPositionY)->at(i);
+        auto const& background_repeat_value = coordinated_value_list.get(PropertyID::BackgroundRepeat)->at(i);
+        auto const& background_size_value = coordinated_value_list.get(PropertyID::BackgroundSize)->at(i);
+
+        BackgroundLayerData layer;
+
+        layer.attachment = keyword_to_background_attachment(background_attachment_value->to_keyword()).value();
+        layer.blend_mode = keyword_to_mix_blend_mode(background_blend_mode_value->to_keyword()).value();
+        layer.clip = keyword_to_background_box(background_clip_value->to_keyword()).value();
+
+        if (background_image_value->is_abstract_image())
+            layer.background_image = background_image_value->as_abstract_image();
+        else
+            VERIFY(background_image_value->to_keyword() == Keyword::None);
+
+        layer.origin = keyword_to_background_box(background_origin_value->to_keyword()).value();
+
+        layer.position_edge_x = background_position_x_value->as_edge().edge().value_or(PositionEdge::Left);
+        layer.position_offset_x = background_position_x_value->as_edge().offset();
+
+        layer.position_edge_y = background_position_y_value->as_edge().edge().value_or(PositionEdge::Top);
+        layer.position_offset_y = background_position_y_value->as_edge().offset();
+
+        layer.repeat_x = background_repeat_value->as_repeat_style().repeat_x();
+        layer.repeat_y = background_repeat_value->as_repeat_style().repeat_y();
+
+        if (background_size_value->is_background_size()) {
+            layer.size_type = CSS::BackgroundSize::LengthPercentage;
+            layer.size_x = CSS::LengthPercentageOrAuto::from_style_value(background_size_value->as_background_size().size_x());
+            layer.size_y = CSS::LengthPercentageOrAuto::from_style_value(background_size_value->as_background_size().size_y());
+        } else if (background_size_value->is_keyword()) {
+            switch (background_size_value->to_keyword()) {
+            case CSS::Keyword::Contain:
+                layer.size_type = CSS::BackgroundSize::Contain;
+                break;
+            case CSS::Keyword::Cover:
+                layer.size_type = CSS::BackgroundSize::Cover;
+                break;
+            default:
+                VERIFY_NOT_REACHED();
+                break;
+            }
+        } else {
+            VERIFY_NOT_REACHED();
+        }
+
+        layers.unchecked_append(layer);
+    }
+
+    return layers;
+}
+
 Length ComputedProperties::border_spacing_horizontal(Layout::Node const& layout_node) const
 {
     auto resolve_value = [&](auto const& style_value) -> Optional<Length> {
@@ -694,7 +788,7 @@ JustifySelf ComputedProperties::justify_self() const
     return keyword_to_justify_self(value.to_keyword()).release_value();
 }
 
-Vector<Transformation> ComputedProperties::transformations_for_style_value(StyleValue const& value)
+Vector<NonnullRefPtr<TransformationStyleValue const>> ComputedProperties::transformations_for_style_value(StyleValue const& value)
 {
     if (value.is_keyword() && value.to_keyword() == Keyword::None)
         return {};
@@ -703,43 +797,41 @@ Vector<Transformation> ComputedProperties::transformations_for_style_value(Style
         return {};
 
     auto& list = value.as_value_list();
-
-    Vector<Transformation> transformations;
-    for (auto& it : list.values()) {
-        if (!it->is_transformation())
-            return {};
-        transformations.append(it->as_transformation().to_transformation());
+    Vector<NonnullRefPtr<TransformationStyleValue const>> transformations;
+    for (auto const& transform_value : list.values()) {
+        VERIFY(transform_value->is_transformation());
+        transformations.append(transform_value->as_transformation());
     }
     return transformations;
 }
 
-Vector<Transformation> ComputedProperties::transformations() const
+Vector<NonnullRefPtr<TransformationStyleValue const>> ComputedProperties::transformations() const
 {
     return transformations_for_style_value(property(PropertyID::Transform));
 }
 
-Optional<Transformation> ComputedProperties::rotate() const
+RefPtr<TransformationStyleValue const> ComputedProperties::rotate() const
 {
     auto const& value = property(PropertyID::Rotate);
     if (!value.is_transformation())
         return {};
-    return value.as_transformation().to_transformation();
+    return value.as_transformation();
 }
 
-Optional<Transformation> ComputedProperties::translate() const
+RefPtr<TransformationStyleValue const> ComputedProperties::translate() const
 {
     auto const& value = property(PropertyID::Translate);
     if (!value.is_transformation())
         return {};
-    return value.as_transformation().to_transformation();
+    return value.as_transformation();
 }
 
-Optional<Transformation> ComputedProperties::scale() const
+RefPtr<TransformationStyleValue const> ComputedProperties::scale() const
 {
     auto const& value = property(PropertyID::Scale);
     if (!value.is_transformation())
         return {};
-    return value.as_transformation().to_transformation();
+    return value.as_transformation();
 }
 
 TransformBox ComputedProperties::transform_box() const
@@ -1945,7 +2037,7 @@ HashMap<StringView, u8> ComputedProperties::font_feature_settings() const
     return {};
 }
 
-Optional<HashMap<FlyString, NumberOrCalculated>> ComputedProperties::font_variation_settings() const
+HashMap<FlyString, double> ComputedProperties::font_variation_settings() const
 {
     auto const& value = property(PropertyID::FontVariationSettings);
 
@@ -1954,7 +2046,7 @@ Optional<HashMap<FlyString, NumberOrCalculated>> ComputedProperties::font_variat
 
     if (value.is_value_list()) {
         auto const& axis_tags = value.as_value_list().values();
-        HashMap<FlyString, NumberOrCalculated> result;
+        HashMap<FlyString, double> result;
         result.ensure_capacity(axis_tags.size());
         for (auto const& tag_value : axis_tags) {
             auto const& axis_tag = tag_value->as_open_type_tagged();
@@ -1963,7 +2055,7 @@ Optional<HashMap<FlyString, NumberOrCalculated>> ComputedProperties::font_variat
                 result.set(axis_tag.tag(), axis_tag.value()->as_number().number());
             } else {
                 VERIFY(axis_tag.value()->is_calculated());
-                result.set(axis_tag.tag(), NumberOrCalculated { axis_tag.value()->as_calculated() });
+                result.set(axis_tag.tag(), axis_tag.value()->as_calculated().resolve_number({}).value());
             }
         }
         return result;
@@ -2541,6 +2633,27 @@ WillChange ComputedProperties::will_change() const
     }
 
     return WillChange(move(will_change_entries));
+}
+
+ValueComparingNonnullRefPtr<Gfx::FontCascadeList const> ComputedProperties::computed_font_list(FontComputer const& font_computer) const
+{
+    if (!m_cached_computed_font_list) {
+        const_cast<ComputedProperties*>(this)->m_cached_computed_font_list = font_computer.compute_font_for_style_values(property(PropertyID::FontFamily), font_size(), font_slope(), font_weight(), font_width(), font_variation_settings());
+        VERIFY(!m_cached_computed_font_list->is_empty());
+    }
+
+    return *m_cached_computed_font_list;
+}
+
+ValueComparingNonnullRefPtr<Gfx::Font const> ComputedProperties::first_available_computed_font(FontComputer const& font_computer) const
+{
+    if (!m_cached_first_available_computed_font) {
+        // https://drafts.csswg.org/css-fonts/#first-available-font
+        // First font for which the character U+0020 (space) is not excluded by a unicode-range
+        const_cast<ComputedProperties*>(this)->m_cached_first_available_computed_font = computed_font_list(font_computer)->font_for_code_point(' ');
+    }
+
+    return *m_cached_first_available_computed_font;
 }
 
 CSSPixels ComputedProperties::font_size() const

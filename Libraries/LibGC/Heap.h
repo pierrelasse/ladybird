@@ -30,12 +30,12 @@
 
 namespace GC {
 
-class GC_API Heap : public HeapBase {
+class GC_API Heap {
     AK_MAKE_NONCOPYABLE(Heap);
     AK_MAKE_NONMOVABLE(Heap);
 
 public:
-    explicit Heap(void* private_data, AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> gather_embedder_roots);
+    explicit Heap(AK::Function<void(HashMap<Cell*, GC::HeapRoot>&)> gather_embedder_roots);
     ~Heap();
 
     static Heap& the();
@@ -95,6 +95,8 @@ private:
     void defer_gc();
     void undefer_gc();
 
+    void dump_allocators();
+
     static bool cell_must_survive_garbage_collection(Cell const&);
 
     template<typename T>
@@ -119,6 +121,7 @@ private:
     void finalize_unmarked_cells();
     void sweep_dead_cells(bool print_report, Core::ElapsedTimer const&);
     void sweep_weak_blocks();
+    void run_post_gc_tasks();
 
     ALWAYS_INLINE CellAllocator& allocator_for_size(size_t cell_size)
     {

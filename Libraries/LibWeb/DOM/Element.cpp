@@ -126,6 +126,7 @@ void Element::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_inline_style);
     visitor.visit(m_class_list);
     visitor.visit(m_shadow_root);
+    visitor.visit(m_part_list);
     visitor.visit(m_custom_element_definition);
     visitor.visit(m_custom_state_set);
     visitor.visit(m_cascaded_properties);
@@ -368,8 +369,8 @@ WebIDL::ExceptionOr<QualifiedName> validate_and_extract(JS::Realm& realm, Option
 // https://dom.spec.whatwg.org/#dom-element-setattributens
 WebIDL::ExceptionOr<void> Element::set_attribute_ns_for_bindings(Optional<FlyString> const& namespace_, FlyString const& qualified_name, Variant<GC::Root<TrustedTypes::TrustedHTML>, GC::Root<TrustedTypes::TrustedScript>, GC::Root<TrustedTypes::TrustedScriptURL>, Utf16String> const& value)
 {
-    // 1. Let (namespace, prefix, localName) be the result of validating and extracting namespace and qualifiedName given "element".
-    auto extracted_qualified_name = TRY(validate_and_extract(realm(), namespace_, qualified_name, ValidationContext::Element));
+    // 1. Let (namespace, prefix, localName) be the result of validating and extracting namespace and qualifiedName given "attribute".
+    auto extracted_qualified_name = TRY(validate_and_extract(realm(), namespace_, qualified_name, ValidationContext::Attribute));
 
     // 2. Let verifiedValue be the result of calling get Trusted Types-compliant attribute value
     //    with localName, namespace, this, and value.
@@ -696,7 +697,7 @@ static CSS::RequiredInvalidationAfterStyleChange compute_required_invalidation(C
 {
     CSS::RequiredInvalidationAfterStyleChange invalidation;
 
-    if (!old_style.computed_font_list().equals(new_style.computed_font_list()))
+    if (old_style.cached_computed_font_list() != new_style.cached_computed_font_list())
         invalidation.relayout = true;
 
     for (auto i = to_underlying(CSS::first_longhand_property_id); i <= to_underlying(CSS::last_longhand_property_id); ++i) {
@@ -889,11 +890,21 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
     return invalidation;
 }
 
-DOMTokenList* Element::class_list()
+GC::Ref<DOMTokenList> Element::class_list()
 {
     if (!m_class_list)
         m_class_list = DOMTokenList::create(*this, HTML::AttributeNames::class_);
-    return m_class_list;
+    return *m_class_list;
+}
+
+// https://drafts.csswg.org/css-shadow-parts/#dom-element-part
+GC::Ref<DOMTokenList> Element::part_list()
+{
+    // The part attribute’s getter must return a DOMTokenList object whose associated element is the context object and
+    // whose associated attribute’s local name is part.
+    if (!m_part_list)
+        m_part_list = DOMTokenList::create(*this, HTML::AttributeNames::part);
+    return *m_part_list;
 }
 
 // https://dom.spec.whatwg.org/#valid-shadow-host-name
@@ -1417,7 +1428,6 @@ void Element::removed_from(Node* old_parent, Node& old_root)
     }
 
     play_or_cancel_animations_after_display_property_change();
-    remove_animations_from_timeline();
 }
 
 void Element::moved_from(GC::Ptr<Node> old_parent)
@@ -2430,13 +2440,11 @@ static CSSPixelPoint determine_the_scroll_into_view_position(Element& target, Bi
 }
 
 // https://drafts.csswg.org/cssom-view-1/#scroll-a-target-into-view
-static ErrorOr<void> scroll_an_element_into_view(Element& target, Bindings::ScrollBehavior behavior, Bindings::ScrollLogicalPosition block, Bindings::ScrollLogicalPosition inline_, GC::Ptr<Element> container)
+static GC::Ref<WebIDL::Promise> scroll_an_element_into_view(Element& target, Bindings::ScrollBehavior behavior, Bindings::ScrollLogicalPosition block, Bindings::ScrollLogicalPosition inline_, GC::Ptr<Element> container)
 {
-    // To scroll a target into view target, which is an Element, pseudo-element, or Range, with a scroll behavior behavior,
-    // a block flow direction position block, an inline base direction position inline, and an optional containing Element
-    // to stop scrolling after reaching container, means to run these steps:
+    // FIXME: 1. Let ancestorPromises be an empty set of Promises.
 
-    // 1. For each ancestor element or viewport that establishes a scrolling box scrolling box, in order of innermost
+    // 2. For each ancestor element or viewport that establishes a scrolling box scrolling box, in order of innermost
     //    to outermost scrolling box, run these substeps:
     auto* ancestor = target.parent();
     Vector<Node&> scrolling_boxes;
@@ -2447,21 +2455,19 @@ static ErrorOr<void> scroll_an_element_into_view(Element& target, Bindings::Scro
     }
 
     for (auto& scrolling_box : scrolling_boxes) {
-        // 1. If the Document associated with target is not same origin with the Document
-        //    associated with the element or viewport associated with scrolling box, terminate these steps.
-        if (target.document().origin() != scrolling_box.document().origin()) {
+        // 1. If the Document associated with target is not same origin with the Document associated with the element
+        //    or viewport associated with scrolling box, abort any remaining iteration of this loop.
+        if (target.document().origin() != scrolling_box.document().origin())
             break;
-        }
-
-        // NOTE: For a viewport scrolling box is initial containing block
-        // CSSPixelRect scrolling_box = scrolling_box.document().viewport_rect();
 
         // 2. Let position be the scroll position resulting from running the steps to determine the scroll-into-view
-        //    position of target with block as the block flow position, inline as the inline base direction position
-        //    and scrolling box as the scrolling box.
+        //    position of target with behavior as the scroll behavior, block as the block flow position, inline as the
+        //    inline base direction position and scrolling box as the scrolling box.
+        // FIXME: Pass in behavior.
         auto position = determine_the_scroll_into_view_position(target, block, inline_, scrolling_box);
 
-        // 3. If position is not the same as scrolling box’s current scroll position, or scrolling box has an ongoing smooth scroll,
+        // 3. If position is not the same as scrolling box’s current scroll position, or scrolling box has an ongoing
+        //    smooth scroll,
         // FIXME: Actually check this condition.
         if (true) {
             // -> If scrolling box is associated with an element
@@ -2475,6 +2481,7 @@ static ErrorOr<void> scroll_an_element_into_view(Element& target, Bindings::Scro
 
                 // FIXME: 2. Let root element be document’s root element, if there is one, or null otherwise.
                 // FIXME: 3. Perform a scroll of the viewport to position, with root element as the associated element and behavior as the scroll behavior.
+                //           Add the Promise returned from this step in the set ancestorPromises.
                 (void)behavior;
 
                 // AD-HOC:
@@ -2486,18 +2493,26 @@ static ErrorOr<void> scroll_an_element_into_view(Element& target, Bindings::Scro
         }
 
         // 4. If container is not null and either scrolling box is a shadow-including inclusive ancestor of container
-        //    or is a viewport whose document is a shadow-including inclusive ancestor of container, abort the rest of
-        //    these steps.
+        //    or is a viewport whose document is a shadow-including inclusive ancestor of container, abort any
+        //    remaining iteration of this loop.
         // NB: Our viewports *are* Documents in the DOM, so both checks are equivalent.
         if (container != nullptr && scrolling_box.is_shadow_including_inclusive_ancestor_of(*container))
             break;
     }
 
-    return {};
+    // 3. Let scrollPromise be a new Promise.
+    auto scroll_promise = WebIDL::create_promise(target.realm());
+
+    // 4. Return scrollPromise, and run the remaining steps in parallel.
+    // 5. Resolve scrollPromise when all Promises in ancestorPromises have settled.
+    // FIXME: Actually wait for those promises.
+    WebIDL::resolve_promise(target.realm(), scroll_promise);
+
+    return scroll_promise;
 }
 
-// https://w3c.github.io/csswg-drafts/cssom-view-1/#dom-element-scrollintoview
-ErrorOr<void> Element::scroll_into_view(Optional<Variant<bool, ScrollIntoViewOptions>> arg)
+// https://drafts.csswg.org/cssom-view/#dom-element-scrollintoview
+GC::Ref<WebIDL::Promise> Element::scroll_into_view(Optional<Variant<bool, ScrollIntoViewOptions>> arg)
 {
     // 1. Let behavior be "auto".
     auto behavior = Bindings::ScrollBehavior::Auto;
@@ -2533,17 +2548,21 @@ ErrorOr<void> Element::scroll_into_view(Optional<Variant<bool, ScrollIntoViewOpt
         block = Bindings::ScrollLogicalPosition::End;
     }
 
-    // 7. If the element does not have any associated box, or is not available to user-agent features, then return.
+    // 7. If the element does not have any associated box, or is not available to user-agent features, then return a
+    //    resolved Promise and abort the remaining steps.
     document().update_layout(UpdateLayoutReason::ElementScrollIntoView);
+    HTML::TemporaryExecutionContext temporary_execution_context { realm() };
     if (!layout_node())
-        return Error::from_string_literal("Element has no associated box");
+        return WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
-    // 8. Scroll the element into view with behavior, block, and inline.
-    TRY(scroll_an_element_into_view(*this, behavior, block, inline_, container));
+    // 8. Scroll the element into view with behavior, block, inline, and container. Let scrollPromise be the Promise
+    //    returned from this step.
+    auto scroll_promise = scroll_an_element_into_view(*this, behavior, block, inline_, container);
 
     // FIXME: 9. Optionally perform some other action that brings the element to the user’s attention.
 
-    return {};
+    // 10. Return scrollPromise.
+    return scroll_promise;
 }
 
 #define __ENUMERATE_ARIA_ATTRIBUTE(name, attribute)                  \
@@ -3154,7 +3173,7 @@ OrderedHashMap<FlyString, CSS::StyleProperty> const& Element::custom_properties(
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scroll
-void Element::scroll(double x, double y)
+GC::Ref<WebIDL::Promise> Element::scroll(double x, double y)
 {
     // 1. If invoked with one argument, follow these substeps:
     //    NOTE: Not relevant here.
@@ -3170,21 +3189,22 @@ void Element::scroll(double x, double y)
     // 3. Let document be the element’s node document.
     auto& document = this->document();
 
-    // 4. If document is not the active document, terminate these steps.
+    // 4. If document is not the active document, return a resolved Promise and abort the remaining steps.
     if (!document.is_active())
-        return;
+        return WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
     // 5. Let window be the value of document’s defaultView attribute.
     // FIXME: The specification expects defaultView to be a Window object, but defaultView actually returns a WindowProxy object.
     auto window = document.window();
 
-    // 6. If window is null, terminate these steps.
+    // 6. If window is null, return a resolved Promise and abort the remaining steps.
     if (!window)
-        return;
+        return WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
-    // 7. If the element is the root element and document is in quirks mode, terminate these steps.
+    // 7. If the element is the root element and document is in quirks mode, return a resolved Promise and abort the
+    //    remaining steps.
     if (document.document_element() == this && document.in_quirks_mode())
-        return;
+        return WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
     // OPTIMIZATION: Scrolling an unscrolled element to (0, 0) is a no-op as long
     //               as the element is not eligible to be the Document.scrollingElement.
@@ -3193,40 +3213,44 @@ void Element::scroll(double x, double y)
         && scroll_offset({}).is_zero()
         && this != document.body()
         && this != document.document_element()) {
-        return;
+        return WebIDL::create_resolved_promise(realm(), JS::js_undefined());
     }
 
-    // NOTE: Ensure that layout is up-to-date before looking at metrics.
+    // NB: Ensure that layout is up-to-date before looking at metrics.
     document.update_layout(UpdateLayoutReason::ElementScroll);
 
-    // 8. If the element is the root element invoke scroll() on window with scrollX on window as first argument and y as second argument, and terminate these steps.
-    if (document.document_element() == this) {
-        window->scroll(window->scroll_x(), y);
-        return;
-    }
+    // 8. If the element is the root element, return the Promise returned by scroll() on window after the method is
+    //    invoked with scrollX on window as first argument and y as second argument, and abort the remaining steps.
+    if (document.document_element() == this)
+        return window->scroll(window->scroll_x(), y);
 
-    // 9. If the element is the body element, document is in quirks mode, and the element is not potentially scrollable, invoke scroll() on window
-    //    with options as the only argument, and terminate these steps.
-    if (document.body() == this && document.in_quirks_mode() && !is_potentially_scrollable()) {
-        window->scroll(x, y);
-        return;
-    }
+    // 9. If the element is the body element, document is in quirks mode, and the element is not potentially
+    //    scrollable, return the Promise returned by scroll() on window after the method is invoked with options as the
+    //    only argument, and abort the remaining steps.
+    if (document.body() == this && document.in_quirks_mode() && !is_potentially_scrollable())
+        return window->scroll(x, y);
 
-    // 10. If the element does not have any associated box, the element has no associated scrolling box, or the element has no overflow, terminate these steps.
+    // 10. If the element does not have any associated box, the element has no associated scrolling box, or the element
+    //     has no overflow, return a resolved Promise and abort the remaining steps.
     // FIXME: or the element has no overflow
     if (!paintable_box())
-        return;
+        return WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
-    // 11. Scroll the element to x,y, with the scroll behavior being the value of the behavior dictionary member of options.
+    // 11. Scroll the element to x,y, with the scroll behavior being the value of the behavior dictionary member of
+    //     options. Let scrollPromise be the Promise returned from this step.
     // FIXME: Implement this in terms of calling "scroll the element".
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_x(CSSPixels::nearest_value_for(x));
     scroll_offset.set_y(CSSPixels::nearest_value_for(y));
     (void)paintable_box()->set_scroll_offset(scroll_offset);
+    auto scroll_promise = WebIDL::create_resolved_promise(realm(), JS::js_undefined());
+
+    // 12. Return scrollPromise.
+    return scroll_promise;
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scroll
-void Element::scroll(HTML::ScrollToOptions options)
+GC::Ref<WebIDL::Promise> Element::scroll(HTML::ScrollToOptions options)
 {
     // 1. If invoked with one argument, follow these substeps:
     //     1. Let options be the argument.
@@ -3236,32 +3260,36 @@ void Element::scroll(HTML::ScrollToOptions options)
     // NOTE: remaining steps performed by Element::scroll(double x, double y)
     auto x = options.left.has_value() ? HTML::normalize_non_finite_values(options.left.value()) : scroll_left();
     auto y = options.top.has_value() ? HTML::normalize_non_finite_values(options.top.value()) : scroll_top();
-    scroll(x, y);
+    return scroll(x, y);
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scrollby
-void Element::scroll_by(double x, double y)
+GC::Ref<WebIDL::Promise> Element::scroll_by(double x, double y)
 {
-    // 1. Let options be null converted to a ScrollToOptions dictionary. [WEBIDL]
+    // 2. If invoked with two arguments, follow these substeps:
+    //    1. Let options be null converted to a ScrollToOptions dictionary. [WEBIDL]
     HTML::ScrollToOptions options;
 
-    // 2. Let x and y be the arguments, respectively.
-    // 3. Normalize non-finite values for x and y.
-    // 4. Let the left dictionary member of options have the value x.
-    // 5. Let the top dictionary member of options have the value y.
+    //    2. Let x and y be the arguments, respectively.
+    //    3. Normalize non-finite values for x and y.
+    //    4. Let the left dictionary member of options have the value x.
+    //    5. Let the top dictionary member of options have the value y.
     // NOTE: Element::scroll_by(HTML::ScrollToOptions) performs the normalization and following steps.
     options.left = x;
     options.top = y;
-    scroll_by(options);
+    return scroll_by(options);
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scrollby
-void Element::scroll_by(HTML::ScrollToOptions options)
+GC::Ref<WebIDL::Promise> Element::scroll_by(HTML::ScrollToOptions options)
 {
-    // 1. Let options be the argument.
-    // 2. Normalize non-finite values for left and top dictionary members of options, if present.
+    // 1. If invoked with one argument, follow these substeps:
+    //    1. Let options be the argument.
+    //    2. Normalize non-finite values for left and top dictionary members of options, if present.
     auto left = HTML::normalize_non_finite_values(options.left);
     auto top = HTML::normalize_non_finite_values(options.top);
+
+    // NB: Step 2 is implemented by the other overload of scroll_by().
 
     // 3. Add the value of scrollLeft to the left dictionary member.
     options.left = scroll_left() + left;
@@ -3269,8 +3297,8 @@ void Element::scroll_by(HTML::ScrollToOptions options)
     // 4. Add the value of scrollTop to the top dictionary member.
     options.top = scroll_top() + top;
 
-    // 5. Act as if the scroll() method was invoked with options as the only argument.
-    scroll(options);
+    // 5. Return the Promise returned by scroll() after the method is invoked with options as the only argument.
+    return scroll(options);
 }
 
 // https://drafts.csswg.org/cssom-view-1/#dom-element-checkvisibility
@@ -3421,7 +3449,7 @@ i32 Element::number_of_owned_list_items() const
 }
 
 // https://html.spec.whatwg.org/multipage/grouping-content.html#list-owner
-Element* Element::list_owner() const
+GC::Ptr<Element> Element::list_owner() const
 {
     // Any element whose computed value of 'display' is 'list-item' has a list owner, which is determined as follows:
     if (!m_is_contained_in_list_subtree && (!computed_properties() || !computed_properties()->display().is_list_item()))
@@ -3460,7 +3488,7 @@ Element* Element::list_owner() const
 
 void Element::maybe_invalidate_ordinals_for_list_owner(Optional<Element*> skip_node)
 {
-    if (Element* owner = list_owner())
+    if (auto owner = list_owner())
         owner->for_each_numbered_item_owned_by_list_owner([&](Element* item) {
             if (skip_node.has_value() && item == skip_node.value())
                 return IterationDecision::Continue;
@@ -3480,7 +3508,7 @@ i32 Element::ordinal_value()
     if (m_ordinal_value.has_value())
         return m_ordinal_value.value();
 
-    auto* owner = list_owner();
+    auto owner = list_owner();
     if (!owner)
         return 1;
 
@@ -3489,8 +3517,7 @@ i32 Element::ordinal_value()
     AK::Checked<i32> numbering = 1;
     auto reversed = false;
 
-    if (owner->is_html_olist_element()) {
-        auto const* ol_element = static_cast<HTML::HTMLOListElement const*>(owner);
+    if (auto* ol_element = as_if<HTML::HTMLOListElement>(owner.ptr())) {
         numbering = ol_element->starting_value().value();
         reversed = ol_element->has_attribute(HTML::AttributeNames::reversed);
     }
@@ -3918,6 +3945,17 @@ void Element::attribute_changed(FlyString const& local_name, Optional<String> co
             element.invalidate_lang_value();
             return TraversalDecision::Continue;
         });
+    } else if (local_name == HTML::AttributeNames::part) {
+        m_parts.clear();
+        if (!value_or_empty.is_empty()) {
+            auto new_parts = value_or_empty.bytes_as_string_view().split_view_if(Infra::is_ascii_whitespace);
+            m_parts.clear();
+            m_parts.ensure_capacity(new_parts.size());
+            for (auto& new_part : new_parts)
+                m_parts.unchecked_append(MUST(FlyString::from_utf8(new_part)));
+        }
+        if (m_part_list)
+            m_part_list->associated_attribute_changed(value_or_empty);
     }
 
     // https://html.spec.whatwg.org/multipage/common-dom-interfaces.html#reflecting-content-attributes-in-idl-attributes:concept-element-attributes-change-ext
@@ -4323,6 +4361,15 @@ double Element::ensure_css_random_base_value(CSS::RandomCachingKey const& random
         static XorShift128PlusRNG random_number_generator;
         return random_number_generator.get();
     });
+}
+
+GC::Ref<WebIDL::Promise> Element::request_pointer_lock(Optional<PointerLockOptions>)
+{
+    dbgln("FIXME: request_pointer_lock()");
+    auto promise = WebIDL::create_promise(realm());
+    auto error = WebIDL::NotSupportedError::create(realm(), "request_pointer_lock() is not implemented"_utf16);
+    WebIDL::reject_promise(realm(), promise, error);
+    return promise;
 }
 
 // The element to inherit style from.

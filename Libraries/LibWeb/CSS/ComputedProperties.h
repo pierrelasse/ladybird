@@ -97,6 +97,7 @@ public:
     TextRendering text_rendering() const;
     CSSPixels text_underline_offset() const;
     TextUnderlinePosition text_underline_position() const;
+    Vector<BackgroundLayerData> background_layers() const;
     Length border_spacing_horizontal(Layout::Node const&) const;
     Length border_spacing_vertical(Layout::Node const&) const;
     CaptionSide caption_side() const;
@@ -166,7 +167,7 @@ public:
     FontKerning font_kerning() const;
     Optional<FlyString> font_language_override() const;
     HashMap<StringView, u8> font_feature_settings() const;
-    Optional<HashMap<FlyString, NumberOrCalculated>> font_variation_settings() const;
+    HashMap<FlyString, double> font_variation_settings() const;
     GridTrackSizeList grid_auto_columns() const;
     GridTrackSizeList grid_auto_rows() const;
     GridTrackSizeList grid_template_columns() const;
@@ -208,14 +209,14 @@ public:
     Display display_before_box_type_transformation() const;
     void set_display_before_box_type_transformation(Display value);
 
-    static Vector<Transformation> transformations_for_style_value(StyleValue const& value);
-    Vector<Transformation> transformations() const;
+    static Vector<NonnullRefPtr<TransformationStyleValue const>> transformations_for_style_value(StyleValue const& value);
+    Vector<NonnullRefPtr<TransformationStyleValue const>> transformations() const;
     TransformBox transform_box() const;
     TransformOrigin transform_origin() const;
     TransformStyle transform_style() const;
-    Optional<Transformation> rotate() const;
-    Optional<Transformation> translate() const;
-    Optional<Transformation> scale() const;
+    RefPtr<TransformationStyleValue const> rotate() const;
+    RefPtr<TransformationStyleValue const> translate() const;
+    RefPtr<TransformationStyleValue const> scale() const;
     Optional<CSSPixels> perspective() const;
     Position perspective_origin() const;
 
@@ -234,25 +235,9 @@ public:
 
     WillChange will_change() const;
 
-    Gfx::FontCascadeList const& computed_font_list() const
-    {
-        VERIFY(m_font_list);
-        return *m_font_list;
-    }
-
-    Gfx::Font const& first_available_computed_font() const
-    {
-        VERIFY(m_first_available_computed_font);
-        return *m_first_available_computed_font;
-    }
-
-    void set_computed_font_list(NonnullRefPtr<Gfx::FontCascadeList const> font_list)
-    {
-        m_font_list = move(font_list);
-        // https://drafts.csswg.org/css-fonts/#first-available-font
-        // First font for which the character U+0020 (space) is not excluded by a unicode-range
-        m_first_available_computed_font = m_font_list->font_for_code_point(' ');
-    }
+    ValueComparingRefPtr<Gfx::FontCascadeList const> cached_computed_font_list() const { return m_cached_computed_font_list; }
+    ValueComparingNonnullRefPtr<Gfx::FontCascadeList const> computed_font_list(FontComputer const&) const;
+    ValueComparingNonnullRefPtr<Gfx::Font const> first_available_computed_font(FontComputer const&) const;
 
     [[nodiscard]] CSSPixels line_height() const;
     [[nodiscard]] CSSPixels font_size() const;
@@ -306,8 +291,14 @@ private:
     Display m_display_before_box_type_transformation { InitialValues::display() };
 
     int m_math_depth { InitialValues::math_depth() };
-    RefPtr<Gfx::FontCascadeList const> m_font_list;
-    RefPtr<Gfx::Font const> m_first_available_computed_font;
+
+    RefPtr<Gfx::FontCascadeList const> m_cached_computed_font_list;
+    RefPtr<Gfx::Font const> m_cached_first_available_computed_font;
+    void clear_computed_font_list_cache()
+    {
+        m_cached_computed_font_list = nullptr;
+        m_cached_first_available_computed_font = nullptr;
+    }
 
     Optional<CSSPixels> m_line_height;
 

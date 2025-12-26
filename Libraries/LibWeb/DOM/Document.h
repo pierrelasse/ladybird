@@ -260,6 +260,9 @@ public:
     CSS::StyleComputer& style_computer() { return *m_style_computer; }
     CSS::StyleComputer const& style_computer() const { return *m_style_computer; }
 
+    CSS::FontComputer& font_computer() { return *m_font_computer; }
+    CSS::FontComputer const& font_computer() const { return *m_font_computer; }
+
     CSS::StyleSheetList& style_sheets();
     CSS::StyleSheetList const& style_sheets() const;
 
@@ -630,8 +633,12 @@ public:
     String domain() const;
     WebIDL::ExceptionOr<void> set_domain(String const&);
 
-    auto& pending_scroll_event_targets() { return m_pending_scroll_event_targets; }
-    auto& pending_scrollend_event_targets() { return m_pending_scrollend_event_targets; }
+    struct PendingScrollEvent {
+        GC::Ref<EventTarget> event_target;
+        FlyString event_type;
+        bool operator==(PendingScrollEvent const&) const = default;
+    };
+    Vector<PendingScrollEvent>& pending_scroll_events() { return m_pending_scroll_events; }
 
     // https://html.spec.whatwg.org/multipage/document-lifecycle.html#completely-loaded
     bool is_completely_loaded() const;
@@ -757,7 +764,7 @@ public:
         Optional<double> scheduled_event_time;
     };
     void append_pending_animation_event(PendingAnimationEvent const&);
-    void update_animations_and_send_events(Optional<double> const& timestamp);
+    void update_animations_and_send_events(double timestamp);
     void remove_replaced_animations();
 
     WebIDL::ExceptionOr<Vector<GC::Ref<Animations::Animation>>> get_animations();
@@ -955,6 +962,8 @@ public:
     CSS::StyleScope const& style_scope() const { return m_style_scope; }
     CSS::StyleScope& style_scope() { return m_style_scope; }
 
+    void exit_pointer_lock();
+
 protected:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
@@ -962,6 +971,9 @@ protected:
     Document(JS::Realm&, URL::URL const&, TemporaryDocumentForFragmentParsing = TemporaryDocumentForFragmentParsing::No);
 
 private:
+    // ^JS::Object
+    virtual bool is_dom_document() const final { return true; }
+
     // ^HTML::GlobalEventHandlers
     virtual GC::Ptr<EventTarget> global_event_handlers_to_event_target(FlyString const&) final { return *this; }
 
@@ -1010,6 +1022,7 @@ private:
 
     GC::Ref<Page> m_page;
     GC::Ptr<CSS::StyleComputer> m_style_computer;
+    GC::Ptr<CSS::FontComputer> m_font_computer;
     GC::Ptr<CSS::StyleSheetList> m_style_sheets;
     GC::Ptr<Node> m_active_favicon;
     GC::Ptr<HTML::BrowsingContext> m_browsing_context;
@@ -1123,11 +1136,9 @@ private:
 
     HashTable<ViewportClient*> m_viewport_clients;
 
-    // https://w3c.github.io/csswg-drafts/cssom-view-1/#document-pending-scroll-event-targets
-    Vector<GC::Ref<EventTarget>> m_pending_scroll_event_targets;
-
-    // https://w3c.github.io/csswg-drafts/cssom-view-1/#document-pending-scrollend-event-targets
-    Vector<GC::Ref<EventTarget>> m_pending_scrollend_event_targets;
+    // https://drafts.csswg.org/cssom-view-1/#document-pending-scroll-events
+    // Each Document has an associated list of pending scroll events, which stores pairs of (EventTarget, DOMString), initially empty.
+    Vector<PendingScrollEvent> m_pending_scroll_events;
 
     // Used by evaluate_media_queries_and_report_changes().
     bool m_needs_media_query_evaluation { false };
@@ -1362,5 +1373,12 @@ template<>
 inline bool Node::fast_is<Document>() const { return is_document(); }
 
 bool is_a_registrable_domain_suffix_of_or_is_equal_to(StringView host_suffix_string, URL::Host const& original_host);
+
+}
+
+namespace JS {
+
+template<>
+inline bool JS::Object::fast_is<Web::DOM::Document>() const { return is_dom_document(); }
 
 }

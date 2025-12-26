@@ -679,28 +679,37 @@ public:
     Utf16FlyString const& string() const { return m_string; }
 
     struct Local {
-        enum Type {
+        enum Type : u8 {
+            None,
             Argument,
             Variable,
         };
         Type type;
-        size_t index;
+        u32 index;
 
         bool is_argument() const { return type == Argument; }
         bool is_variable() const { return type == Variable; }
 
-        static Local variable(size_t index) { return { Variable, index }; }
-        static Local argument(size_t index) { return { Argument, index }; }
+        static Local variable(u32 index) { return { Variable, index }; }
+        static Local argument(u32 index) { return { Argument, index }; }
     };
 
-    bool is_local() const { return m_local_index.has_value(); }
+    bool is_local() const { return m_local_type != Local::Type::None; }
     Local local_index() const
     {
-        VERIFY(m_local_index.has_value());
-        return m_local_index.value();
+        VERIFY(m_local_type != Local::Type::None);
+        return Local { m_local_type, m_local_index };
     }
-    void set_local_variable_index(size_t index) { m_local_index = Local::variable(index); }
-    void set_argument_index(size_t index) { m_local_index = Local::argument(index); }
+    void set_local_variable_index(u32 index)
+    {
+        m_local_type = Local::Type::Variable;
+        m_local_index = index;
+    }
+    void set_argument_index(u32 index)
+    {
+        m_local_type = Local::Type::Argument;
+        m_local_index = index;
+    }
 
     bool is_global() const { return m_is_global; }
     void set_is_global() { m_is_global = true; }
@@ -714,9 +723,11 @@ public:
 private:
     virtual bool is_identifier() const override { return true; }
 
+    u32 m_local_index;
     Utf16FlyString m_string;
 
-    Optional<Local> m_local_index;
+    Local::Type m_local_type { Local::Type::None };
+
     bool m_is_global { false };
     DeclarationKind m_declaration_kind { DeclarationKind::None };
 };
@@ -776,7 +787,7 @@ class JS_API FunctionNode {
 public:
     Utf16FlyString name() const { return m_name ? m_name->string() : Utf16FlyString {}; }
     RefPtr<Identifier const> name_identifier() const { return m_name; }
-    ByteString const& source_text() const { return m_source_text; }
+    Utf16View source_text() const { return m_source_text; }
     Statement const& body() const { return *m_body; }
     auto const& body_ptr() const { return m_body; }
     auto const& parameters() const { return m_parameters; }
@@ -798,13 +809,13 @@ public:
     virtual ~FunctionNode();
 
 protected:
-    FunctionNode(RefPtr<Identifier const> name, ByteString source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights parsing_insights, bool is_arrow_function, Vector<LocalVariable> local_variables_names);
+    FunctionNode(RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights parsing_insights, bool is_arrow_function, Vector<LocalVariable> local_variables_names);
     void dump(int indent, ByteString const& class_name) const;
 
     RefPtr<Identifier const> m_name { nullptr };
 
 private:
-    ByteString m_source_text;
+    Utf16View m_source_text;
     NonnullRefPtr<Statement const> m_body;
     NonnullRefPtr<FunctionParameters const> m_parameters;
     i32 const m_function_length;
@@ -824,9 +835,9 @@ class FunctionDeclaration final
 public:
     static bool must_have_name() { return true; }
 
-    FunctionDeclaration(SourceRange source_range, RefPtr<Identifier const> name, ByteString source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, Vector<LocalVariable> local_variables_names)
+    FunctionDeclaration(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, Vector<LocalVariable> local_variables_names)
         : Declaration(move(source_range))
-        , FunctionNode(move(name), move(source_text), move(body), move(parameters), function_length, kind, is_strict_mode, insights, false, move(local_variables_names))
+        , FunctionNode(move(name), source_text, move(body), move(parameters), function_length, kind, is_strict_mode, insights, false, move(local_variables_names))
     {
     }
 
@@ -853,16 +864,16 @@ class FunctionExpression final
 public:
     static bool must_have_name() { return false; }
 
-    FunctionExpression(SourceRange source_range, RefPtr<Identifier const> name, ByteString source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, Vector<LocalVariable> local_variables_names, bool is_arrow_function = false)
+    FunctionExpression(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, Vector<LocalVariable> local_variables_names, bool is_arrow_function = false)
         : Expression(move(source_range))
-        , FunctionNode(move(name), move(source_text), move(body), move(parameters), function_length, kind, is_strict_mode, insights, is_arrow_function, move(local_variables_names))
+        , FunctionNode(move(name), source_text, move(body), move(parameters), function_length, kind, is_strict_mode, insights, is_arrow_function, move(local_variables_names))
     {
     }
 
     virtual void dump(int indent) const override;
 
     virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
+    Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}, bool is_method = false) const;
 
     bool has_name() const override { return !name().is_empty(); }
 
@@ -1487,7 +1498,7 @@ public:
 
 class ClassExpression final : public Expression {
 public:
-    ClassExpression(SourceRange source_range, RefPtr<Identifier const> name, ByteString source_text, RefPtr<FunctionExpression const> constructor, RefPtr<Expression const> super_class, Vector<NonnullRefPtr<ClassElement const>> elements)
+    ClassExpression(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, RefPtr<FunctionExpression const> constructor, RefPtr<Expression const> super_class, Vector<NonnullRefPtr<ClassElement const>> elements)
         : Expression(move(source_range))
         , m_name(move(name))
         , m_source_text(move(source_text))
@@ -1499,7 +1510,7 @@ public:
 
     Utf16FlyString name() const { return m_name ? m_name->string() : Utf16FlyString {}; }
 
-    ByteString const& source_text() const { return m_source_text; }
+    Utf16View source_text() const { return m_source_text; }
     RefPtr<FunctionExpression const> constructor() const { return m_constructor; }
 
     virtual void dump(int indent) const override;
@@ -1516,7 +1527,7 @@ private:
     friend ClassDeclaration;
 
     RefPtr<Identifier const> m_name;
-    ByteString m_source_text;
+    Utf16View m_source_text;
     RefPtr<FunctionExpression const> m_constructor;
     RefPtr<Expression const> m_super_class;
     Vector<NonnullRefPtr<ClassElement const>> m_elements;

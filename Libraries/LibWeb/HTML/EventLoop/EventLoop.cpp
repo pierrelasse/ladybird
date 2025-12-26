@@ -8,8 +8,8 @@
 #include <LibCore/EventLoop.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/CSS/FontComputer.h>
 #include <LibWeb/CSS/FontFaceSet.h>
-#include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/HTML/BrowsingContext.h>
@@ -267,8 +267,19 @@ void EventLoop::process_input_events() const
     auto process_input_events_queue = [&](Page& page) {
         auto& page_client = page.client();
         auto& input_events_queue = page_client.input_event_queue();
+
+        // Process events only for this page, collecting others to re-enqueue
+        Queue<Web::QueuedInputEvent> events_for_other_pages;
+
         while (!input_events_queue.is_empty()) {
             auto event = input_events_queue.dequeue();
+
+            // Skip events that are not intended for this page
+            if (event.page_id != page_client.id()) {
+                events_for_other_pages.enqueue(move(event));
+                continue;
+            }
+
             auto result = event.event.visit(
                 [&](KeyEvent const& key_event) {
                     switch (key_event.type) {
@@ -306,6 +317,11 @@ void EventLoop::process_input_events() const
             for (size_t i = 0; i < event.coalesced_event_count; ++i)
                 page_client.report_finished_handling_input_event(event.page_id, EventResult::Dropped);
             page_client.report_finished_handling_input_event(event.page_id, result);
+        }
+
+        // Re-enqueue events for other pages
+        while (!events_for_other_pages.is_empty()) {
+            input_events_queue.enqueue(events_for_other_pages.dequeue());
         }
 
         page.handle_sdl_input_events();
@@ -508,7 +524,7 @@ void EventLoop::update_the_rendering()
     }
 
     for (auto& document : docs) {
-        if (document->readiness() == HTML::DocumentReadyState::Complete && document->style_computer().number_of_css_font_faces_with_loading_in_progress() == 0) {
+        if (document->readiness() == HTML::DocumentReadyState::Complete && document->font_computer().number_of_css_font_faces_with_loading_in_progress() == 0) {
             HTML::TemporaryExecutionContext context(document->realm(), HTML::TemporaryExecutionContext::CallbacksEnabled::Yes);
             document->fonts()->resolve_ready_promise();
         }

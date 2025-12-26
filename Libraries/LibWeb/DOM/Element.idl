@@ -36,6 +36,11 @@ dictionary CheckVisibilityOptions {
     boolean visibilityProperty = false;
 };
 
+// https://w3c.github.io/pointerlock/#pointerlockoptions-dictionary
+dictionary PointerLockOptions {
+    boolean unadjustedMovement = false;
+};
+
 // https://dom.spec.whatwg.org/#element
 [Exposed=Window]
 interface Element : Node {
@@ -92,13 +97,13 @@ interface Element : Node {
 
     boolean checkVisibility(optional CheckVisibilityOptions options = {});
 
-    undefined scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {});
-    undefined scroll(optional ScrollToOptions options = {});
-    undefined scroll(unrestricted double x, unrestricted double y);
-    [ImplementedAs=scroll] undefined scrollTo(optional ScrollToOptions options = {});
-    [ImplementedAs=scroll] undefined scrollTo(unrestricted double x, unrestricted double y);
-    undefined scrollBy(optional ScrollToOptions options = {});
-    undefined scrollBy(unrestricted double x, unrestricted double y);
+    Promise<undefined> scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {});
+    Promise<undefined> scroll(optional ScrollToOptions options = {});
+    Promise<undefined> scroll(unrestricted double x, unrestricted double y);
+    [ImplementedAs=scroll] Promise<undefined> scrollTo(optional ScrollToOptions options = {});
+    [ImplementedAs=scroll] Promise<undefined> scrollTo(unrestricted double x, unrestricted double y);
+    Promise<undefined> scrollBy(optional ScrollToOptions options = {});
+    Promise<undefined> scrollBy(unrestricted double x, unrestricted double y);
     attribute unrestricted double scrollTop;
     attribute unrestricted double scrollLeft;
     readonly attribute long scrollWidth;
@@ -123,6 +128,12 @@ interface Element : Node {
     undefined setPointerCapture(long pointerId);
     undefined releasePointerCapture(long pointerId);
     boolean hasPointerCapture(long pointerId);
+    
+    // https://drafts.csswg.org/css-shadow-parts/#idl
+    [SameObject, PutForwards=value, ImplementedAs=part_list] readonly attribute DOMTokenList part;
+    
+    // https://w3c.github.io/pointerlock/#requestPointerLock
+    Promise<undefined> requestPointerLock(optional PointerLockOptions options = {});
 };
 
 dictionary GetHTMLOptions {

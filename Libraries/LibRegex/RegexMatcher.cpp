@@ -98,6 +98,15 @@ Regex<Parser>::Regex(regex::Parser::Result parse_result, ByteString pattern, typ
 }
 
 template<class Parser>
+Regex<Parser>::Regex(Regex const& other)
+    : pattern_value(other.pattern_value)
+    , parser_result(other.parser_result)
+{
+    if (other.matcher)
+        matcher = make<Matcher<Parser>>(this, other.matcher->options());
+}
+
+template<class Parser>
 Regex<Parser>::Regex(Regex&& regex)
     : pattern_value(move(regex.pattern_value))
     , parser_result(move(regex.parser_result))
@@ -300,7 +309,8 @@ RegexResult Matcher<Parser>::match(Vector<RegexStringView> const& views, Optiona
             auto const insensitive = input.regex_options.has_flag_set(AllFlags::Insensitive);
             if (auto& starting_ranges = m_pattern->parser_result.optimization_data.starting_ranges; !starting_ranges.is_empty()) {
                 auto ranges = insensitive ? m_pattern->parser_result.optimization_data.starting_ranges_insensitive.span() : starting_ranges.span();
-                auto ch = input.view.unicode_aware_code_point_at(view_index);
+                auto code_unit_index = input.view.unicode() ? input.view.code_unit_offset_of(view_index) : view_index;
+                auto ch = input.view.unicode_aware_code_point_at(code_unit_index);
                 if (insensitive)
                     ch = to_ascii_lowercase(ch);
 
@@ -511,6 +521,7 @@ bool Matcher<Parser>::execute(MatchInput const& input, MatchState& state, size_t
 
     for (;;) {
         auto& opcode = bytecode.get_opcode(state);
+        auto const opcode_size = opcode.size();
         ++operations;
 
 #if REGEX_DEBUG
@@ -529,7 +540,7 @@ bool Matcher<Parser>::execute(MatchInput const& input, MatchState& state, size_t
         s_regex_dbg.print_result(opcode, bytecode, input, state, result);
 #endif
 
-        state.instruction_position += opcode.size();
+        state.instruction_position += opcode_size;
 
         switch (result) {
         case ExecutionResult::Fork_PrioLow: {
@@ -548,7 +559,7 @@ bool Matcher<Parser>::execute(MatchInput const& input, MatchState& state, size_t
             }
             if (!found) {
                 states_to_try_next.append(state);
-                states_to_try_next.last().initiating_fork = state.instruction_position - opcode.size();
+                states_to_try_next.last().initiating_fork = state.instruction_position - opcode_size;
                 states_to_try_next.last().instruction_position = state.fork_at_position;
             }
             continue;
@@ -568,7 +579,7 @@ bool Matcher<Parser>::execute(MatchInput const& input, MatchState& state, size_t
             }
             if (!found) {
                 states_to_try_next.append(state);
-                states_to_try_next.last().initiating_fork = state.instruction_position - opcode.size();
+                states_to_try_next.last().initiating_fork = state.instruction_position - opcode_size;
             }
             state.instruction_position = state.fork_at_position;
 #if REGEX_DEBUG

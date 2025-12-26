@@ -103,6 +103,11 @@ enum class ProximityToTheViewport : u8 {
     NotDetermined,
 };
 
+// https://w3c.github.io/pointerlock/#pointerlockoptions-dictionary
+struct PointerLockOptions {
+    bool unadjusted_movement = false;
+};
+
 class WEB_API Element
     : public ParentNode
     , public ChildNode<Element>
@@ -178,7 +183,9 @@ public:
     GC::Ptr<DOM::Element> get_the_attribute_associated_element(FlyString const& content_attribute, GC::Ptr<DOM::Element> explicitly_set_attribute_element) const;
     Optional<GC::RootVector<GC::Ref<DOM::Element>>> get_the_attribute_associated_elements(FlyString const& content_attribute, Optional<Vector<GC::Weak<DOM::Element>> const&> explicitly_set_attribute_elements) const;
 
-    DOMTokenList* class_list();
+    GC::Ref<DOMTokenList> class_list();
+    GC::Ref<DOMTokenList> part_list();
+    ReadonlySpan<FlyString> part_names() const { return m_parts; }
 
     WebIDL::ExceptionOr<GC::Ref<ShadowRoot>> attach_shadow(ShadowRootInit init);
     WebIDL::ExceptionOr<void> attach_a_shadow_root(Bindings::ShadowRootMode mode, bool clonable, bool serializable, bool delegates_focus, Bindings::SlotAssignmentMode slot_assignment);
@@ -335,7 +342,7 @@ public:
     WebIDL::ExceptionOr<void> insert_adjacent_text(String const& where, Utf16String const& data);
 
     // https://w3c.github.io/csswg-drafts/cssom-view-1/#dom-element-scrollintoview
-    ErrorOr<void> scroll_into_view(Optional<Variant<bool, ScrollIntoViewOptions>> = {});
+    GC::Ref<WebIDL::Promise> scroll_into_view(Optional<Variant<bool, ScrollIntoViewOptions>> = {});
 
     // https://www.w3.org/TR/wai-aria-1.2/#ARIAMixin
 #define __ENUMERATE_ARIA_ATTRIBUTE(name, attribute) \
@@ -365,7 +372,7 @@ public:
     CustomElementReactionQueue const* custom_element_reaction_queue() const { return m_custom_element_reaction_queue; }
     CustomElementReactionQueue& ensure_custom_element_reaction_queue();
 
-    HTML::CustomStateSet const* custom_state_set() const { return m_custom_state_set; }
+    GC::Ptr<HTML::CustomStateSet const> custom_state_set() const { return m_custom_state_set; }
     HTML::CustomStateSet& ensure_custom_state_set();
 
     JS::ThrowCompletionOr<void> upgrade_element(GC::Ref<HTML::CustomElementDefinition> custom_element_definition);
@@ -380,10 +387,10 @@ public:
     void set_custom_element_state(CustomElementState);
     void setup_custom_element_from_constructor(HTML::CustomElementDefinition& custom_element_definition, Optional<String> const& is_value);
 
-    void scroll(HTML::ScrollToOptions);
-    void scroll(double x, double y);
-    void scroll_by(HTML::ScrollToOptions);
-    void scroll_by(double x, double y);
+    GC::Ref<WebIDL::Promise> scroll(HTML::ScrollToOptions);
+    GC::Ref<WebIDL::Promise> scroll(double x, double y);
+    GC::Ref<WebIDL::Promise> scroll_by(HTML::ScrollToOptions);
+    GC::Ref<WebIDL::Promise> scroll_by(double x, double y);
 
     bool check_visibility(Optional<CheckVisibilityOptions>);
 
@@ -484,7 +491,7 @@ public:
     }
 
     i32 number_of_owned_list_items() const;
-    Element* list_owner() const;
+    GC::Ptr<Element> list_owner() const;
     void maybe_invalidate_ordinals_for_list_owner(Optional<Element*> skip_node = {});
     i32 ordinal_value();
 
@@ -521,6 +528,8 @@ public:
     virtual bool is_implicitly_potentially_render_blocking() const { return false; }
 
     double ensure_css_random_base_value(CSS::RandomCachingKey const&);
+
+    GC::Ref<WebIDL::Promise> request_pointer_lock(Optional<PointerLockOptions>);
 
 protected:
     Element(Document&, DOM::QualifiedName);
@@ -576,6 +585,7 @@ private:
     GC::Ptr<CSS::StylePropertyMap> m_attribute_style_map;
     GC::Ptr<DOMTokenList> m_class_list;
     GC::Ptr<ShadowRoot> m_shadow_root;
+    GC::Ptr<DOMTokenList> m_part_list;
 
     GC::Ptr<CSS::CascadedProperties> m_cascaded_properties;
     GC::Ptr<CSS::ComputedProperties> m_computed_properties;
@@ -588,6 +598,7 @@ private:
     Optional<CSS::PseudoElement> m_use_pseudo_element;
 
     Vector<FlyString> m_classes;
+    Vector<FlyString> m_parts;
     Optional<Dir> m_dir;
 
     Optional<FlyString> m_id;

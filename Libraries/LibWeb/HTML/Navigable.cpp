@@ -37,6 +37,7 @@
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/SandboxingFlagSet.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
+#include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/SessionHistoryEntry.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
@@ -2441,20 +2442,23 @@ void perform_url_and_history_update_steps(DOM::Document& document, URL::URL new_
 void Navigable::scroll_offset_did_change()
 {
     // https://w3c.github.io/csswg-drafts/cssom-view-1/#scrolling-events
-    // Whenever a viewport gets scrolled (whether in response to user interaction or by an API), the user agent must run these steps:
+    // Whenever a viewport gets scrolled (whether in response to user interaction or by an API), the user agent must
+    // run these steps:
 
     // 1. Let doc be the viewport’s associated Document.
     auto doc = active_document();
     VERIFY(doc);
 
-    // 2. If doc is already in doc’s pending scroll event targets, abort these steps.
-    for (auto& target : doc->pending_scroll_event_targets()) {
-        if (target.ptr() == doc)
-            return;
-    }
+    // FIXME: 2. If doc is a snap container, run the steps to update scrollsnapchanging targets for doc with doc’s eventual
+    //    snap target in the block axis as newBlockTarget and doc’s eventual snap target in the inline axis as
+    //    newInlineTarget.
 
-    // 3. Append doc to doc’s pending scroll event targets.
-    doc->pending_scroll_event_targets().append(*doc);
+    // 3. If (doc, "scroll") is already in doc’s pending scroll events, abort these steps.
+    if (doc->pending_scroll_events().contains_slow(DOM::Document::PendingScrollEvent { *doc, EventNames::scroll }))
+        return;
+
+    // 4. Append (doc, "scroll") to doc’s pending scroll events.
+    doc->pending_scroll_events().append({ *doc, EventNames::scroll });
 }
 
 CSSPixelRect Navigable::to_top_level_rect(CSSPixelRect const& a_rect)
@@ -2569,6 +2573,8 @@ void Navigable::inform_the_navigation_api_about_aborting_navigation()
         return;
 
     queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(heap(), [this] {
+        HTML::TemporaryExecutionContext execution_context { active_window()->realm() };
+
         // 2. Let navigation be navigable's active window's navigation API.
         VERIFY(active_window());
         auto navigation = active_window()->navigation();
@@ -2778,7 +2784,7 @@ RefPtr<Gfx::SkiaBackendContext> Navigable::skia_backend_context() const
 }
 
 // https://drafts.csswg.org/cssom-view/#viewport-perform-a-scroll
-void Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
+void Navigable::scroll_viewport_by_delta_without_promise(CSSPixelPoint delta)
 {
     // 1. Let doc be the viewport’s associated Document.
     auto doc = active_document();
@@ -2822,7 +2828,13 @@ void Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
 
     // 13. Let element be doc’s root element if there is one, null otherwise.
 
-    // 14. Perform a scroll of the viewport’s scrolling box to its current scroll position + (layout dx, layout dy) with element as the associated element, and behavior as the scroll behavior.
+    // 14. Perform a scroll of the viewport’s scrolling box to its current scroll position + (layout dx, layout dy)
+    //     with element as the associated element, and behavior as the scroll behavior. Let scrollPromise1 be the
+    //     Promise returned from this step.
+    // FIXME: Get a Promise from this.
+    // AD-HOC: Skip scrolling unscrollable boxes.
+    if (!doc->paintable_box()->could_be_scrolled_by_wheel_event())
+        return;
     auto scrolling_area = doc->paintable_box()->scrollable_overflow_rect()->to_type<float>();
     auto new_viewport_scroll_offset = m_viewport_scroll_offset.to_type<double>() + Gfx::Point(layout_dx, layout_dy);
     // NOTE: Clamp to the scrolling area.
@@ -2830,9 +2842,29 @@ void Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
     new_viewport_scroll_offset.set_y(max(0.0, min(new_viewport_scroll_offset.y(), scrolling_area.height() - viewport_size().height().to_double())));
     perform_scroll_of_viewport(new_viewport_scroll_offset.to_type<CSSPixels>());
 
-    // 15. Perform a scroll of vv’s scrolling box to its current scroll position + (visual dx, visual dy) with element as the associated element, and behavior as the scroll behavior.
+    // 15. Perform a scroll of vv’s scrolling box to its current scroll position + (visual dx, visual dy) with element
+    //     as the associated element, and behavior as the scroll behavior. Let scrollPromise2 be the Promise returned
+    //     from this step.
+    // FIXME: Get a Promise from this.
     vv->scroll_by({ visual_dx, visual_dy });
     doc->set_needs_display(InvalidateDisplayList::No);
+}
+
+// https://drafts.csswg.org/cssom-view/#viewport-perform-a-scroll
+GC::Ref<WebIDL::Promise> Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
+{
+    auto doc = active_document();
+
+    scroll_viewport_by_delta_without_promise(delta);
+
+    // 16. Let scrollPromise be a new Promise.
+    auto scroll_promise = WebIDL::create_promise(doc->realm());
+
+    // 17. Return scrollPromise, and run the remaining steps in parallel.
+    // 18. Resolve scrollPromise when both scrollPromise1 and scrollPromise2 have settled.
+    // FIXME: Actually wait for scroll to occur. For now, all our scrolls are instant.
+    WebIDL::resolve_promise(doc->realm(), scroll_promise);
+    return scroll_promise;
 }
 
 void Navigable::reset_zoom()

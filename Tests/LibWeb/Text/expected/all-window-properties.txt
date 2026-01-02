@@ -323,6 +323,7 @@ OfflineAudioContext
 OffscreenCanvas
 OffscreenCanvasRenderingContext2D
 Option
+Origin
 OscillatorNode
 PageTransitionEvent
 PannerNode
@@ -347,6 +348,7 @@ ProcessingInstruction
 ProgressEvent
 Promise
 PromiseRejectionEvent
+QuotaExceededError
 RadioNodeList
 Range
 RangeError

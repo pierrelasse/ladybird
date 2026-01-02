@@ -350,6 +350,7 @@ set(SOURCES
     DOM/Utils.cpp
     DOM/XMLDocument.cpp
     DOMURL/DOMURL.cpp
+    DOMURL/Origin.cpp
     DOMURL/URLSearchParams.cpp
     DOMURL/URLSearchParamsIterator.cpp
     Dump.cpp
@@ -1094,6 +1095,7 @@ set(SOURCES
     WebIDL/ObservableArray.cpp
     WebIDL/OverloadResolution.cpp
     WebIDL/Promise.cpp
+    WebIDL/QuotaExceededError.cpp
     WebIDL/Tracing.cpp
     WebSockets/WebSocket.cpp
     WebVTT/VTTCue.cpp
